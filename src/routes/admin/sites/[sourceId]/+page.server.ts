@@ -3,6 +3,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { PageServerLoad } from './$types';
 import { requireAdmin } from '$lib/server/admin/auth';
 import { upsertSourceCategoryRule, deleteSourceCategoryRule } from '$lib/server/categorization/url-rules';
+import { isUniqueViolation } from '$lib/server/db/errors';
 import { db } from '$lib/server/db';
 import { categories, sourceCategoryRules, sourceFeeds, sources } from '$lib/server/db/schema';
 import {
@@ -10,6 +11,17 @@ import {
 	getSourceApprovalContext,
 	isApprovedSource
 } from '$lib/server/sources/approval';
+import {
+	normalizeDomain,
+	normalizeFeedUrl,
+	normalizeSlug,
+	normalizeSourceName,
+	normalizeUrlPattern,
+	validateFeedInput,
+	validateSourceIdentityInput,
+	validateUrlPatternInput,
+	type ValidationFailure
+} from '$lib/server/validation/input';
 
 type SourceDetailRow = {
 	id: number;
@@ -114,18 +126,57 @@ export const actions: Actions = {
 		requireAdmin(event);
 		const sourceId = parseSourceId(event.params.sourceId);
 		const form = await event.request.formData();
-		const name = String(form.get('name') ?? '').trim();
-		const slug = String(form.get('slug') ?? '').trim();
+		const name = normalizeSourceName(form.get('name'));
+		const slug = normalizeSlug(form.get('slug'));
 		const domain = normalizeDomain(form.get('domain'));
 
-		if (!name || !slug || !domain) {
-			return fail(400, { action: 'updateSourceDetails', error: 'Név, slug és domain szükséges.' });
+		const validation = validateSourceIdentityInput({ name, slug, domain });
+		if (!validation.ok) {
+			return fail(400, { action: 'updateSourceDetails', error: sourceDetailError(validation) });
 		}
 
-		await db
-			.update(sources)
-			.set({ name, slug, domain, updatedAt: new Date() })
-			.where(eq(sources.id, sourceId));
+		const normalized = validation.data;
+		const [conflict] = await db.execute<{ id: number; slug: string; domain: string }>(sql`
+			SELECT id, slug, domain
+			FROM sources
+			WHERE id <> ${sourceId}
+				AND (slug = ${normalized.slug} OR domain = ${normalized.domain})
+			LIMIT 1
+		`);
+
+		if (conflict?.slug === normalized.slug) {
+			return fail(400, { action: 'updateSourceDetails', error: 'Ez a slug már foglalt.' });
+		}
+		if (conflict?.domain === normalized.domain) {
+			return fail(400, {
+				action: 'updateSourceDetails',
+				error: 'Ehhez a domainhez már tartozik másik forrás.'
+			});
+		}
+
+		try {
+			await db
+				.update(sources)
+				.set({
+					name: normalized.name,
+					slug: normalized.slug,
+					domain: normalized.domain,
+					updatedAt: new Date()
+				})
+				.where(eq(sources.id, sourceId));
+		} catch (error) {
+			if (isUniqueViolation(error, 'sources_slug_idx')) {
+				return fail(400, { action: 'updateSourceDetails', error: 'Ez a slug már foglalt.' });
+			}
+			if (isUniqueViolation(error, 'sources_domain_idx')) {
+				return fail(400, {
+					action: 'updateSourceDetails',
+					error: 'Ehhez a domainhez már tartozik másik forrás.'
+				});
+			}
+
+			throw error;
+		}
 
 		return { ok: true, action: 'updateSourceDetails' };
 	},
@@ -182,17 +233,26 @@ export const actions: Actions = {
 		const sourceId = parseSourceId(event.params.sourceId);
 		const source = await getSourceApprovalContext(sourceId);
 		const form = await event.request.formData();
-		const feedUrl = String(form.get('feedUrl') ?? '').trim();
+		const feedUrl = normalizeFeedUrl(form.get('feedUrl'));
 		const categoryId = parseOptionalId(form.get('categoryId'));
 
-		if (!feedUrl) return fail(400, { action: 'addFeed', error: 'Feed URL szükséges.' });
+		const validation = validateFeedInput({ feedUrl });
+		if (!validation.ok) {
+			return fail(400, { action: 'addFeed', error: sourceDetailError(validation) });
+		}
 		if (!isApprovedSource(source.approvalStatus)) {
 			return fail(409, { action: 'addFeed', error: 'A forrás jóváhagyása szükséges ehhez a művelethez.' });
 		}
 
 		await db
 			.insert(sourceFeeds)
-			.values({ sourceId, feedUrl, categoryId, status: 'active', updatedAt: new Date() })
+			.values({
+				sourceId,
+				feedUrl: validation.data.feedUrl,
+				categoryId,
+				status: 'active',
+				updatedAt: new Date()
+			})
 			.onConflictDoUpdate({
 				target: sourceFeeds.feedUrl,
 				set: { sourceId, categoryId, status: 'active', updatedAt: new Date() }
@@ -230,16 +290,20 @@ export const actions: Actions = {
 		const source = await getSourceApprovalContext(sourceId);
 		const form = await event.request.formData();
 		const categoryId = Number(form.get('categoryId'));
-		const urlPattern = String(form.get('urlPattern') ?? '');
+		const urlPattern = normalizeUrlPattern(form.get('urlPattern'));
 
-		if (!Number.isInteger(categoryId) || !urlPattern.trim()) {
+		const validation = validateUrlPatternInput({ urlPattern });
+		if (!Number.isInteger(categoryId)) {
 			return fail(400, { action: 'addRule', error: 'Rovat és URL minta szükséges.' });
+		}
+		if (!validation.ok) {
+			return fail(400, { action: 'addRule', error: sourceDetailError(validation) });
 		}
 		if (!isApprovedSource(source.approvalStatus)) {
 			return fail(409, { action: 'addRule', error: 'A forrás jóváhagyása szükséges ehhez a művelethez.' });
 		}
 
-		await upsertSourceCategoryRule({ sourceId, categoryId, urlPattern });
+		await upsertSourceCategoryRule({ sourceId, categoryId, urlPattern: validation.data.urlPattern });
 		return { ok: true, action: 'addRule' };
 	},
 	deleteRule: async (event) => {
@@ -274,10 +338,34 @@ function parseOptionalId(value: FormDataEntryValue | null) {
 	return Number.isInteger(id) ? id : null;
 }
 
-function normalizeDomain(value: FormDataEntryValue | null) {
-	return String(value ?? '').trim().replace(/^https?:\/\//, '').replace(/^www\./, '');
-}
-
 function toIsoString(value: Date | string) {
 	return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function sourceDetailError(validation: ValidationFailure) {
+	if (validation.fieldErrors.slug) {
+		return validation.fieldErrors.slug === 'Slug szükséges.'
+			? validation.fieldErrors.slug
+			: 'A slug csak kisbetűket, számokat és kötőjeleket tartalmazhat.';
+	}
+	if (validation.fieldErrors.domain) {
+		return validation.fieldErrors.domain === 'Domain szükséges.'
+			? validation.fieldErrors.domain
+			: 'Adj meg érvényes domain nevet, például pelda.hu.';
+	}
+	if (validation.fieldErrors.feedUrl) {
+		return validation.fieldErrors.feedUrl === 'Feed URL szükséges.'
+			? validation.fieldErrors.feedUrl
+			: 'Adj meg érvényes HTTP vagy HTTPS feed URL-t.';
+	}
+	if (validation.fieldErrors.urlPattern) {
+		return validation.fieldErrors.urlPattern === 'URL minta szükséges.'
+			? validation.fieldErrors.urlPattern
+			: 'Adj meg érvényes URL mintát, például pelda.hu/rovat/*.';
+	}
+	if (validation.fieldErrors.name) {
+		return 'A forrás neve nem lehet üres vagy túl hosszú.';
+	}
+
+	return validation.summary || 'Érvényes forrásadatok szükségesek.';
 }

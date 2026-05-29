@@ -1,9 +1,19 @@
 import { eq } from 'drizzle-orm';
 import { fail, redirect } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
+import { isUniqueViolation } from '$lib/server/db/errors';
 import { auth } from '$lib/server/auth';
 import { db } from '$lib/server/db';
 import { sources, user as authUsers } from '$lib/server/db/schema';
+import {
+	normalizeDomain,
+	normalizeEmail,
+	normalizePartnerName,
+	normalizeSlug,
+	normalizeSourceName,
+	validatePartnerSignupInput,
+	type ValidationFailure
+} from '$lib/server/validation/input';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (locals.user) redirect(303, locals.user.role === 'admin' ? '/admin' : '/partner');
@@ -13,13 +23,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 export const actions: Actions = {
 	default: async (event) => {
 		const form = await event.request.formData();
-		const partnerName = String(form.get('partnerName') ?? '').trim();
-		const email = String(form.get('email') ?? '')
-			.trim()
-			.toLowerCase();
+		const partnerName = normalizePartnerName(form.get('partnerName'));
+		const email = normalizeEmail(form.get('email'));
 		const password = String(form.get('password') ?? '');
-		const sourceName = String(form.get('sourceName') ?? '').trim();
-		const slug = String(form.get('slug') ?? '').trim();
+		const sourceName = normalizeSourceName(form.get('sourceName'));
+		const slug = normalizeSlug(form.get('slug'));
 		const domain = normalizeDomain(form.get('domain'));
 
 		const values = {
@@ -30,17 +38,33 @@ export const actions: Actions = {
 			domain
 		};
 
-		if (!partnerName || !email || !password || !sourceName || !slug || !domain) {
-			return fail(400, {
-				...values,
-				error: 'Név, email, jelszó, forrásnév, slug és domain szükséges.'
-			});
+		const validation = validatePartnerSignupInput({
+			partnerName,
+			email,
+			password,
+			sourceName,
+			slug,
+			domain
+		});
+
+		if (!validation.ok) {
+			return fail(400, { ...values, error: partnerSignupError(validation) });
 		}
 
+		const normalized = validation.data;
+
 		const [existingUser, existingSlug, existingDomain] = await Promise.all([
-			db.select({ id: authUsers.id }).from(authUsers).where(eq(authUsers.email, email)).limit(1),
-			db.select({ id: sources.id }).from(sources).where(eq(sources.slug, slug)).limit(1),
-			db.select({ id: sources.id }).from(sources).where(eq(sources.domain, domain)).limit(1)
+			db
+				.select({ id: authUsers.id })
+				.from(authUsers)
+				.where(eq(authUsers.email, normalized.email))
+				.limit(1),
+			db.select({ id: sources.id }).from(sources).where(eq(sources.slug, normalized.slug)).limit(1),
+			db
+				.select({ id: sources.id })
+				.from(sources)
+				.where(eq(sources.domain, normalized.domain))
+				.limit(1)
 		]);
 
 		if (existingUser[0]) {
@@ -59,9 +83,9 @@ export const actions: Actions = {
 			const [source] = await db
 				.insert(sources)
 				.values({
-					name: sourceName,
-					slug,
-					domain,
+					name: normalized.sourceName,
+					slug: normalized.slug,
+					domain: normalized.domain,
 					approvalStatus: 'pending',
 					status: 'pending',
 					updatedAt: new Date()
@@ -73,8 +97,8 @@ export const actions: Actions = {
 			const signup = await auth.api.signUpEmail({
 				headers: event.request.headers,
 				body: {
-					name: partnerName,
-					email,
+					name: normalized.partnerName,
+					email: normalized.email,
 					password,
 					rememberMe: true
 				}
@@ -87,6 +111,16 @@ export const actions: Actions = {
 		} catch (error) {
 			if (sourceId) {
 				await db.delete(sources).where(eq(sources.id, sourceId));
+			}
+
+			if (isUniqueViolation(error, 'user_email_idx')) {
+				return fail(400, { ...values, error: 'Ez az email cím már használatban van.' });
+			}
+			if (isUniqueViolation(error, 'sources_slug_idx')) {
+				return fail(400, { ...values, error: 'Ez a source slug már foglalt.' });
+			}
+			if (isUniqueViolation(error, 'sources_domain_idx')) {
+				return fail(400, { ...values, error: 'Ehhez a domainhez már tartozik forrás.' });
 			}
 
 			return fail(400, {
@@ -102,11 +136,28 @@ export const actions: Actions = {
 	}
 };
 
-function normalizeDomain(value: FormDataEntryValue | null) {
-	return String(value ?? '')
-		.trim()
-		.toLowerCase()
-		.replace(/^https?:\/\//, '')
-		.replace(/^www\./, '')
-		.replace(/\/+$/, '');
+function partnerSignupError(validation: ValidationFailure) {
+	if (validation.fieldErrors.password) {
+		return 'A jelszónak legalább 12 karakteresnek kell lennie, és tartalmaznia kell legalább egy betűt és egy számot.';
+	}
+	if (validation.fieldErrors.email) {
+		return validation.fieldErrors.email === 'Email cím szükséges.'
+			? validation.fieldErrors.email
+			: 'Adj meg érvényes email címet.';
+	}
+	if (validation.fieldErrors.slug) {
+		return validation.fieldErrors.slug === 'Slug szükséges.'
+			? validation.fieldErrors.slug
+			: 'A slug csak kisbetűket, számokat és kötőjeleket tartalmazhat.';
+	}
+	if (validation.fieldErrors.domain) {
+		return validation.fieldErrors.domain === 'Domain szükséges.'
+			? validation.fieldErrors.domain
+			: 'Adj meg érvényes domain nevet, például pelda.hu.';
+	}
+	if (validation.fieldErrors.partnerName || validation.fieldErrors.sourceName) {
+		return 'A név mezők nem lehetnek üresek vagy túl hosszúak.';
+	}
+
+	return validation.summary || 'A regisztrációhoz érvényes adatok szükségesek.';
 }

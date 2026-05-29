@@ -4,6 +4,7 @@ import { db } from '$lib/server/db';
 import { articleCategories, articles, clickEvents, sources } from '$lib/server/db/schema';
 import { classifyClick } from '$lib/server/articles/click-tracking';
 import { buildTrackedUrl, getArticleUtm } from '$lib/server/articles/utm';
+import { normalizeTrackingMetadata } from '$lib/server/validation/input';
 
 export const GET: RequestHandler = async ({ params, request, getClientAddress }) => {
 	const articleId = Number(params.articleId);
@@ -31,10 +32,15 @@ export const GET: RequestHandler = async ({ params, request, getClientAddress })
 		.from(articleCategories)
 		.where(eq(articleCategories.articleId, article.id))
 		.limit(1);
+	const metadata = normalizeTrackingMetadata({
+		referrer: request.headers.get('referer'),
+		userAgent: request.headers.get('user-agent')
+	});
+	const { referrer, userAgent } = metadata.ok ? metadata.data : { referrer: null, userAgent: null };
 	const click = await classifyClick({
 		articleId: article.id,
 		ipAddress: getClientAddress(),
-		userAgent: request.headers.get('user-agent')
+		userAgent
 	});
 	const utm = getArticleUtm(article.id, article);
 
@@ -42,8 +48,8 @@ export const GET: RequestHandler = async ({ params, request, getClientAddress })
 		articleId: article.id,
 		sourceId: article.sourceId,
 		categoryId: primaryCategory?.categoryId ?? null,
-		referrer: request.headers.get('referer'),
-		userAgent: request.headers.get('user-agent'),
+		referrer,
+		userAgent,
 		ipHash: click.ipHash,
 		utmCampaign: utm.campaign,
 		utmContent: utm.content,

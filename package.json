@@ -10,6 +10,7 @@
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"test:validation": "node --test --experimental-strip-types src/lib/server/validation/input.test.ts",
 		"spec:validate": "openspec validate --all",
 		"worker": "node --experimental-strip-types --loader ./scripts/sveltekit-loader.mjs scripts/ingestion-worker.ts",
 		"worker:once": "node --experimental-strip-types --loader ./scripts/sveltekit-loader.mjs scripts/ingestion-worker.ts --once",
@@ -38,6 +39,7 @@
 	},
 	"dependencies": {
 		"@better-auth/drizzle-adapter": "^1.6.11",
+		"arktype": "^2.2.0",
 		"better-auth": "^1.6.11",
 		"fast-xml-parser": "^5.8.0",
 		"meilisearch": "^0.58.0"

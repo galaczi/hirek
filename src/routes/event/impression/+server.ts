@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { classifyRequest } from '$lib/server/articles/click-tracking';
 import { db } from '$lib/server/db';
 import { impressionEvents } from '$lib/server/db/schema';
+import { normalizeImpressionPayload } from '$lib/server/validation/input';
 
 type ImpressionPayload = {
 	articleIds?: unknown;
@@ -15,12 +16,16 @@ type ImpressionArticleRow = {
 	category_id: number | null;
 };
 
-const MAX_BATCH_SIZE = 100;
-
 export const POST: RequestHandler = async ({ request, getClientAddress }) => {
 	const payload = (await request.json().catch(() => null)) as ImpressionPayload | null;
-	const articleIds = normalizeArticleIds(payload?.articleIds);
-	if (articleIds.length === 0) error(400, 'No article ids provided.');
+	const normalized = normalizeImpressionPayload({
+		articleIds: payload?.articleIds,
+		pagePath: payload?.pagePath,
+		referrer: request.headers.get('referer'),
+		userAgent: request.headers.get('user-agent')
+	});
+	if (!normalized.ok) error(400, 'No article ids provided.');
+	const { articleIds, pagePath, referrer, userAgent } = normalized.data;
 	const articleIdSql = sql.join(
 		articleIds.map((id) => sql`${id}`),
 		sql`, `
@@ -42,9 +47,8 @@ export const POST: RequestHandler = async ({ request, getClientAddress }) => {
 
 	const traffic = classifyRequest({
 		ipAddress: getClientAddress(),
-		userAgent: request.headers.get('user-agent')
+		userAgent
 	});
-	const pagePath = normalizePagePath(payload?.pagePath);
 
 	await db.insert(impressionEvents).values(
 		rows.map((row) => ({
@@ -52,8 +56,8 @@ export const POST: RequestHandler = async ({ request, getClientAddress }) => {
 			sourceId: row.source_id,
 			categoryId: row.category_id,
 			pagePath,
-			referrer: request.headers.get('referer'),
-			userAgent: request.headers.get('user-agent'),
+			referrer,
+			userAgent,
 			ipHash: traffic.ipHash,
 			isBot: traffic.isBot,
 			botName: traffic.botName
@@ -62,19 +66,3 @@ export const POST: RequestHandler = async ({ request, getClientAddress }) => {
 
 	return json({ ok: true, inserted: rows.length });
 };
-
-function normalizeArticleIds(value: unknown) {
-	if (!Array.isArray(value)) return [];
-	const ids = value
-		.map((item) => Number(item))
-		.filter((id) => Number.isInteger(id) && id > 0)
-		.slice(0, MAX_BATCH_SIZE);
-	return Array.from(new Set(ids));
-}
-
-function normalizePagePath(value: unknown) {
-	if (typeof value !== 'string') return null;
-	const trimmed = value.trim();
-	if (!trimmed || trimmed.length > 500) return null;
-	return trimmed;
-}

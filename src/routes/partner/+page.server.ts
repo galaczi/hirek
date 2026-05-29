@@ -16,6 +16,12 @@ import { getArticleSearchDocuments } from '$lib/server/articles/search-documents
 import { indexArticles } from '$lib/server/search/meili';
 import { upsertSourceCategoryRule } from '$lib/server/categorization/url-rules';
 import { getSourceApprovalContext, isApprovedSource } from '$lib/server/sources/approval';
+import {
+	normalizeUrlPattern,
+	validateUrlPatternInput,
+	validateUtmSettingsInput,
+	type ValidationFailure
+} from '$lib/server/validation/input';
 
 type ClicksOverTimeRow = {
 	day: string;
@@ -486,10 +492,14 @@ export const actions: Actions = {
 		const { sourceId } = requirePartnerAccess(event);
 		const form = await event.request.formData();
 		const categorySlug = String(form.get('categorySlug') ?? '');
-		const urlPattern = String(form.get('urlPattern') ?? '');
+		const urlPattern = normalizeUrlPattern(form.get('urlPattern'));
 
-		if (!sourceId || !categorySlug || !urlPattern.trim()) {
+		if (!sourceId || !categorySlug) {
 			return { ok: false, action: 'addUrlRule', error: 'Source, category and URL pattern are required.' };
+		}
+		const validation = validateUrlPatternInput({ urlPattern });
+		if (!validation.ok) {
+			return { ok: false, action: 'addUrlRule', error: partnerInputError(validation) };
 		}
 		if (!isApprovedSource((await getSourceApprovalContext(sourceId)).approvalStatus)) {
 			return {
@@ -507,7 +517,11 @@ export const actions: Actions = {
 
 		if (!category) return { ok: false, action: 'addUrlRule', error: 'Category not found.' };
 
-		await upsertSourceCategoryRule({ sourceId, categoryId: category.id, urlPattern });
+		await upsertSourceCategoryRule({
+			sourceId,
+			categoryId: category.id,
+			urlPattern: validation.data.urlPattern
+		});
 		return { ok: true, action: 'addUrlRule' };
 	},
 	deleteUrlRule: async (event) => {
@@ -547,16 +561,25 @@ export const actions: Actions = {
 			};
 		}
 
-		const utmSource = normalizeUtmValue(form.get('utmSource'), 'hirek.hu');
-		const utmMedium = normalizeUtmValue(form.get('utmMedium'), 'referral');
-		const utmCampaign = normalizeUtmValue(form.get('utmCampaign'), 'hirek_stream');
+		const validation = validateUtmSettingsInput({
+			utmSource: form.get('utmSource'),
+			utmMedium: form.get('utmMedium'),
+			utmCampaign: form.get('utmCampaign')
+		});
+		if (!validation.ok) {
+			return {
+				ok: false,
+				action: 'updateUtmSettings',
+				error: partnerInputError(validation)
+			};
+		}
 
 		await db
 			.update(sources)
 			.set({
-				utmSource,
-				utmMedium,
-				utmCampaign,
+				utmSource: validation.data.utmSource,
+				utmMedium: validation.data.utmMedium,
+				utmCampaign: validation.data.utmCampaign,
 				updatedAt: new Date()
 			})
 			.where(eq(sources.id, sourceId));
@@ -632,7 +655,19 @@ function formatDayLabel(day: string) {
 	}).format(new Date(`${day}T00:00:00.000Z`));
 }
 
-function normalizeUtmValue(value: FormDataEntryValue | null, fallback: string) {
-	const clean = String(value ?? '').trim();
-	return clean.slice(0, 120) || fallback;
+function partnerInputError(validation: ValidationFailure) {
+	if (validation.fieldErrors.urlPattern) {
+		return validation.fieldErrors.urlPattern === 'URL minta szükséges.'
+			? validation.fieldErrors.urlPattern
+			: 'Adj meg érvényes URL mintát, például pelda.hu/rovat/*.';
+	}
+	if (
+		validation.fieldErrors.utmSource ||
+		validation.fieldErrors.utmMedium ||
+		validation.fieldErrors.utmCampaign
+	) {
+		return 'Az UTM mezők csak betűket, számokat, pontot, aláhúzást, kötőjelet és hullámjelet tartalmazhatnak, és legfeljebb 120 karakteresek lehetnek.';
+	}
+
+	return validation.summary || 'Érvényes partner adatok szükségesek.';
 }

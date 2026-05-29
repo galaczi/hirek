@@ -28,8 +28,9 @@
 		</label>
 		<label>
 			<span>Jelszó</span>
-			<input name="password" type="password" autocomplete="new-password" required />
+			<input name="password" type="password" autocomplete="new-password" minlength="12" required />
 		</label>
+		<p class="form-hint">Legalább 12 karakter, benne legalább egy betű és egy szám.</p>
 		<label>
 			<span>Forrás neve</span>
 			<input name="sourceName" value={form?.sourceName ?? ''} required />

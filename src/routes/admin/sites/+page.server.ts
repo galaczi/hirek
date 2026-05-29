@@ -1,9 +1,17 @@
 import { redirect } from '@sveltejs/kit';
-import { sql, type SQL } from 'drizzle-orm';
+import { and, eq, ne, sql, type SQL } from 'drizzle-orm';
 import type { Actions, PageServerLoad } from './$types';
 import { requireAdmin } from '$lib/server/admin/auth';
+import { isUniqueViolation } from '$lib/server/db/errors';
 import { db } from '$lib/server/db';
 import { sourceFeeds, sources } from '$lib/server/db/schema';
+import {
+	normalizeDomain,
+	normalizeSlug,
+	normalizeSourceName,
+	validateAdminSourceCreateInput,
+	type ValidationFailure
+} from '$lib/server/validation/input';
 
 type SourceRow = {
 	id: number;
@@ -95,44 +103,78 @@ export const actions: Actions = {
 	addSource: async (event) => {
 		requireAdmin(event);
 		const form = await event.request.formData();
-		const name = String(form.get('name') ?? '').trim();
-		const slug = String(form.get('slug') ?? '').trim();
+		const name = normalizeSourceName(form.get('name'));
+		const slug = normalizeSlug(form.get('slug'));
 		const domain = normalizeDomain(form.get('domain'));
 		const feedUrl = String(form.get('feedUrl') ?? '').trim();
 
-		if (!name || !slug || !domain || !feedUrl) {
-			return { ok: false, action: 'addSource', error: 'Név, slug, domain és feed URL szükséges.' };
+		const validation = validateAdminSourceCreateInput({ name, slug, domain, feedUrl });
+		if (!validation.ok) {
+			return { ok: false, action: 'addSource', error: sourceActionError(validation) };
 		}
 
-		const [source] = await db
-			.insert(sources)
-			.values({
-				name,
-				slug,
-				domain,
-				approvalStatus: 'approved',
-				status: 'ingesting',
-				updatedAt: new Date()
-			})
-			.onConflictDoUpdate({
-				target: sources.slug,
-				set: {
-					name,
-					domain,
+		const normalized = validation.data;
+		const [existingDomain] = await db
+			.select({ id: sources.id, slug: sources.slug })
+			.from(sources)
+			.where(and(eq(sources.domain, normalized.domain), ne(sources.slug, normalized.slug)))
+			.limit(1);
+
+		if (existingDomain) {
+			return {
+				ok: false,
+				action: 'addSource',
+				error: 'Ehhez a domainhez már tartozik másik forrás.'
+			};
+		}
+
+		let source;
+
+		try {
+			[source] = await db
+				.insert(sources)
+				.values({
+					name: normalized.name,
+					slug: normalized.slug,
+					domain: normalized.domain,
 					approvalStatus: 'approved',
 					status: 'ingesting',
 					updatedAt: new Date()
-				}
-			})
-			.returning({ id: sources.id });
+				})
+				.onConflictDoUpdate({
+					target: sources.slug,
+					set: {
+						name: normalized.name,
+						domain: normalized.domain,
+						approvalStatus: 'approved',
+						status: 'ingesting',
+						updatedAt: new Date()
+					}
+				})
+				.returning({ id: sources.id });
 
-		await db
-			.insert(sourceFeeds)
-			.values({ sourceId: source.id, feedUrl, status: 'active', updatedAt: new Date() })
-			.onConflictDoUpdate({
-				target: sourceFeeds.feedUrl,
-				set: { sourceId: source.id, status: 'active', updatedAt: new Date() }
-			});
+			await db
+				.insert(sourceFeeds)
+				.values({
+					sourceId: source.id,
+					feedUrl: normalized.feedUrl,
+					status: 'active',
+					updatedAt: new Date()
+				})
+				.onConflictDoUpdate({
+					target: sourceFeeds.feedUrl,
+					set: { sourceId: source.id, status: 'active', updatedAt: new Date() }
+				});
+		} catch (error) {
+			if (isUniqueViolation(error, 'sources_slug_idx')) {
+				return { ok: false, action: 'addSource', error: 'Ez a slug már foglalt.' };
+			}
+			if (isUniqueViolation(error, 'sources_domain_idx')) {
+				return { ok: false, action: 'addSource', error: 'Ehhez a domainhez már tartozik forrás.' };
+			}
+
+			throw error;
+		}
 
 		redirect(303, `/admin/sites/${source.id}/`);
 	}
@@ -173,8 +215,27 @@ function buildWhere(filters: SourceFilters) {
 	return clauses.length > 0 ? sql.join(clauses, sql` AND `) : null;
 }
 
-function normalizeDomain(value: FormDataEntryValue | null) {
-	return String(value ?? '').trim().replace(/^https?:\/\//, '').replace(/^www\./, '');
+function sourceActionError(validation: ValidationFailure) {
+	if (validation.fieldErrors.slug) {
+		return validation.fieldErrors.slug === 'Slug szükséges.'
+			? validation.fieldErrors.slug
+			: 'A slug csak kisbetűket, számokat és kötőjeleket tartalmazhat.';
+	}
+	if (validation.fieldErrors.domain) {
+		return validation.fieldErrors.domain === 'Domain szükséges.'
+			? validation.fieldErrors.domain
+			: 'Adj meg érvényes domain nevet, például pelda.hu.';
+	}
+	if (validation.fieldErrors.feedUrl) {
+		return validation.fieldErrors.feedUrl === 'Feed URL szükséges.'
+			? validation.fieldErrors.feedUrl
+			: 'Adj meg érvényes HTTP vagy HTTPS feed URL-t.';
+	}
+	if (validation.fieldErrors.name) {
+		return 'A forrás neve nem lehet üres vagy túl hosszú.';
+	}
+
+	return validation.summary || 'Érvényes forrásadatok szükségesek.';
 }
 
 function toIsoString(value: Date | string) {
