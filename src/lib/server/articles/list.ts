@@ -1,18 +1,14 @@
-import { sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
+import {
+	articleCategories,
+	articles,
+	categories,
+	clickEvents,
+	sourceFeeds,
+	sources
+} from '$lib/server/db/schema';
 import type { Article } from '$lib/home/data';
-
-type ArticleRow = {
-	id: number;
-	title: string;
-	source_slug: string;
-	source_name: string;
-	category_slug: string | null;
-	category_name: string | null;
-	category_slugs: string[];
-	published_at: Date | string;
-	click_score: number;
-};
 
 export type ArticleListFilters = {
 	category?: string;
@@ -22,88 +18,95 @@ export type ArticleListFilters = {
 };
 
 export async function getArticleList(filters: ArticleListFilters = {}) {
-	const where = [sql`a.active = true`];
-	if (filters.source) where.push(sql`s.slug = ${filters.source}`);
+	const conditions = [eq(articles.active, true)];
+	if (filters.source) conditions.push(eq(sources.slug, filters.source));
 	if (filters.category) {
-		where.push(sql`EXISTS (
-			SELECT 1
-			FROM article_categories ac_filter
-			INNER JOIN categories c_filter ON c_filter.id = ac_filter.category_id
-			WHERE ac_filter.article_id = a.id
-				AND c_filter.slug = ${filters.category}
-		)`);
+		conditions.push(
+			inArray(
+				articles.id,
+				db
+					.select({ articleId: articleCategories.articleId })
+					.from(articleCategories)
+					.innerJoin(categories, eq(categories.id, articleCategories.categoryId))
+					.where(eq(categories.slug, filters.category))
+			)
+		);
 	}
 
-	const order =
-		filters.order === 'top'
-			? sql`a.click_score DESC, a.published_at DESC`
-			: sql`a.published_at DESC, a.click_score DESC`;
 	const limit = Math.min(Math.max(filters.limit ?? 80, 1), 100);
-
-	const rows = await db.execute<ArticleRow>(sql`
-		SELECT
-			a.id,
-			a.title,
-			s.slug AS source_slug,
-			s.name AS source_name,
-			(array_remove(array_agg(DISTINCT c.slug), NULL))[1] AS category_slug,
-			(array_remove(array_agg(DISTINCT c.name), NULL))[1] AS category_name,
-			array_remove(array_agg(DISTINCT c.slug), NULL) AS category_slugs,
-			a.published_at,
-			a.click_score
-		FROM articles a
-		INNER JOIN sources s ON s.id = a.source_id
-		LEFT JOIN article_categories ac ON ac.article_id = a.id
-		LEFT JOIN categories c ON c.id = ac.category_id
-		WHERE ${sql.join(where, sql` AND `)}
-		GROUP BY a.id, s.id
-		ORDER BY ${order}
-		LIMIT ${limit}
-	`);
+	const rows = await db
+		.select({
+			id: articles.id,
+			title: articles.title,
+			sourceSlug: sources.slug,
+			sourceName: sources.name,
+			categorySlug: sql<string | null>`(array_remove(array_agg(DISTINCT ${categories.slug}), NULL))[1]`,
+			categoryName: sql<string | null>`(array_remove(array_agg(DISTINCT ${categories.name}), NULL))[1]`,
+			categorySlugs: sql<string[]>`array_remove(array_agg(DISTINCT ${categories.slug}), NULL)`,
+			publishedAt: articles.publishedAt,
+			clickScore: articles.clickScore
+		})
+		.from(articles)
+		.innerJoin(sources, eq(sources.id, articles.sourceId))
+		.leftJoin(articleCategories, eq(articleCategories.articleId, articles.id))
+		.leftJoin(categories, eq(categories.id, articleCategories.categoryId))
+		.where(and(...conditions))
+		.groupBy(
+			articles.id,
+			articles.title,
+			articles.publishedAt,
+			articles.clickScore,
+			sources.id,
+			sources.slug,
+			sources.name
+		)
+		.orderBy(
+			...(filters.order === 'top'
+				? [desc(articles.clickScore), desc(articles.publishedAt)]
+				: [desc(articles.publishedAt), desc(articles.clickScore)])
+		)
+		.limit(limit);
 
 	return rows.map(toArticle);
 }
 
 export async function getCategoryBySlug(slug: string) {
-	const rows = await db.execute<{ slug: string; name: string }>(sql`
-		SELECT slug, name
-		FROM categories
-		WHERE slug = ${slug}
-		LIMIT 1
-	`);
+	const [row] = await db
+		.select({ slug: categories.slug, name: categories.name })
+		.from(categories)
+		.where(eq(categories.slug, slug))
+		.limit(1);
 
-	return rows[0] ?? null;
+	return row ?? null;
 }
 
 export async function getSourceBySlug(slug: string) {
-	const rows = await db.execute<{
-		id: number;
-		slug: string;
-		name: string;
-		domain: string;
-		status: string;
-		last_fetched_at: Date | string | null;
-		article_count: string | number;
-		click_count: string | number;
-	}>(sql`
-		SELECT
-			s.id,
-			s.slug,
-			s.name,
-			s.domain,
-			s.status,
-			max(sf.last_fetched_at) AS last_fetched_at,
-			(SELECT count(*) FROM articles a WHERE a.source_id = s.id AND a.active = true) AS article_count,
-			(SELECT count(*) FROM click_events ce WHERE ce.source_id = s.id) AS click_count
-		FROM sources s
-		LEFT JOIN source_feeds sf ON sf.source_id = s.id
-		WHERE s.slug = ${slug}
-			AND s.status != 'disabled'
-		GROUP BY s.id
-		LIMIT 1
-	`);
+	const [source] = await db
+		.select({
+			id: sources.id,
+			slug: sources.slug,
+			name: sources.name,
+			domain: sources.domain,
+			status: sources.status,
+			lastFetchedAt: sql<Date | string | null>`max(${sourceFeeds.lastFetchedAt})`,
+			articleCount: sql<number>`(
+				SELECT count(*)::int
+				FROM ${articles}
+				WHERE ${articles.sourceId} = ${sources.id}
+					AND ${articles.active} = true
+			)`,
+			clickCount: sql<number>`(
+				SELECT count(*)::int
+				FROM ${clickEvents}
+				WHERE ${clickEvents.sourceId} = ${sources.id}
+			)`
+		})
+		.from(sources)
+		.leftJoin(sourceFeeds, eq(sourceFeeds.sourceId, sources.id))
+		.where(and(eq(sources.slug, slug), ne(sources.status, 'disabled')))
+		.groupBy(sources.id, sources.slug, sources.name, sources.domain, sources.status)
+		.limit(1);
 
-	const source = rows[0];
 	if (!source) return null;
 
 	return {
@@ -112,23 +115,33 @@ export async function getSourceBySlug(slug: string) {
 		name: source.name,
 		domain: source.domain,
 		status: source.status,
-		lastFetchedAt: source.last_fetched_at ? toIsoString(source.last_fetched_at) : null,
-		articleCount: Number(source.article_count),
-		clickCount: Number(source.click_count)
+		lastFetchedAt: source.lastFetchedAt ? toIsoString(source.lastFetchedAt) : null,
+		articleCount: Number(source.articleCount),
+		clickCount: Number(source.clickCount)
 	};
 }
 
-function toArticle(row: ArticleRow): Article {
+function toArticle(row: {
+	id: number;
+	title: string;
+	sourceSlug: string;
+	sourceName: string;
+	categorySlug: string | null;
+	categoryName: string | null;
+	categorySlugs: string[] | null;
+	publishedAt: Date | string;
+	clickScore: number;
+}): Article {
 	return {
 		id: row.id,
 		title: row.title,
-		category: row.category_slug ?? 'uncategorized',
-		categoryName: row.category_name ?? 'Egyéb',
-		categorySlugs: row.category_slugs ?? [],
-		source: row.source_slug,
-		sourceName: row.source_name,
-		publishedAt: toIsoString(row.published_at),
-		clicks: row.click_score
+		category: row.categorySlug ?? 'uncategorized',
+		categoryName: row.categoryName ?? 'Egyéb',
+		categorySlugs: row.categorySlugs ?? [],
+		source: row.sourceSlug,
+		sourceName: row.sourceName,
+		publishedAt: toIsoString(row.publishedAt),
+		clicks: row.clickScore
 	};
 }
 

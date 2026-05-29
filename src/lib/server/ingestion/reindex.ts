@@ -1,51 +1,50 @@
-import { sql } from 'drizzle-orm';
+import { desc, eq, sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
+import { articleCategories, articles, categories, sources } from '$lib/server/db/schema';
 import { configureArticleIndex, indexArticles } from '$lib/server/search/meili';
 import type { ArticleSearchDocument } from '$lib/server/search/types';
 
-type ArticleIndexRow = {
-	id: number;
-	title: string;
-	excerpt: string | null;
-	source_name: string;
-	source_slug: string;
-	category_slugs: string[];
-	published_at: Date | string;
-	url_host: string;
-	click_score: number;
-};
-
 export async function reindexArticles() {
-	const rows = await db.execute<ArticleIndexRow>(sql`
-		SELECT
-			a.id,
-			a.title,
-			a.excerpt,
-			s.name AS source_name,
-			s.slug AS source_slug,
-			array_remove(array_agg(DISTINCT c.slug), NULL) AS category_slugs,
-			a.published_at,
-			a.url_host,
-			a.click_score
-		FROM articles a
-		INNER JOIN sources s ON s.id = a.source_id
-		LEFT JOIN article_categories ac ON ac.article_id = a.id
-		LEFT JOIN categories c ON c.id = ac.category_id
-		WHERE a.active = true
-		GROUP BY a.id, s.id
-		ORDER BY a.published_at DESC
-	`);
+	const rows = await db
+		.select({
+			id: articles.id,
+			title: articles.title,
+			excerpt: articles.excerpt,
+			sourceName: sources.name,
+			sourceSlug: sources.slug,
+			categorySlugs: sql<string[]>`array_remove(array_agg(DISTINCT ${categories.slug}), NULL)`,
+			publishedAt: articles.publishedAt,
+			urlHost: articles.urlHost,
+			clickScore: articles.clickScore
+		})
+		.from(articles)
+		.innerJoin(sources, eq(sources.id, articles.sourceId))
+		.leftJoin(articleCategories, eq(articleCategories.articleId, articles.id))
+		.leftJoin(categories, eq(categories.id, articleCategories.categoryId))
+		.where(eq(articles.active, true))
+		.groupBy(
+			articles.id,
+			articles.title,
+			articles.excerpt,
+			articles.publishedAt,
+			articles.urlHost,
+			articles.clickScore,
+			sources.id,
+			sources.name,
+			sources.slug
+		)
+		.orderBy(desc(articles.publishedAt));
 
 	const documents: ArticleSearchDocument[] = rows.map((row) => ({
 		id: row.id,
 		title: row.title,
 		excerpt: row.excerpt,
-		sourceName: row.source_name,
-		sourceSlug: row.source_slug,
-		categorySlugs: row.category_slugs ?? [],
-		publishedAt: toIsoString(row.published_at),
-		urlHost: row.url_host,
-		clickScore: row.click_score
+		sourceName: row.sourceName,
+		sourceSlug: row.sourceSlug,
+		categorySlugs: row.categorySlugs ?? [],
+		publishedAt: toIsoString(row.publishedAt),
+		urlHost: row.urlHost,
+		clickScore: row.clickScore
 	}));
 
 	await configureArticleIndex();

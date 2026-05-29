@@ -1,5 +1,5 @@
 import { error, fail, type Actions } from '@sveltejs/kit';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, ne, or, sql } from 'drizzle-orm';
 import type { PageServerLoad } from './$types';
 import { requireAdmin } from '$lib/server/admin/auth';
 import { upsertSourceCategoryRule, deleteSourceCategoryRule } from '$lib/server/categorization/url-rules';
@@ -23,49 +23,42 @@ import {
 	type ValidationFailure
 } from '$lib/server/validation/input';
 
-type SourceDetailRow = {
-	id: number;
-	slug: string;
-	name: string;
-	domain: string;
-	approval_status: string;
-	status: string;
-	status_note: string | null;
-	total_feed_count: string | number;
-	active_feed_count: string | number;
-	last_fetched_at: Date | string | null;
-	last_error: string | null;
-};
-
 const SOURCE_STATUSES = ['ingesting', 'needs_rss', 'needs_adapter', 'blocked', 'pending', 'disabled'];
 const FEED_STATUSES = ['active', 'error', 'inactive'];
 
 export const load: PageServerLoad = async (event) => {
 	requireAdmin(event);
 	const sourceId = parseSourceId(event.params.sourceId);
+	const lastErrorExpr = sql<string | null>`(array_remove(array_agg(${sourceFeeds.lastError} ORDER BY ${sourceFeeds.updatedAt} DESC), NULL))[1]`;
 
 	const [sourceRows, categoryRows, ruleRows, feedRows] = await Promise.all([
-		db.execute<SourceDetailRow>(sql`
-			SELECT
-				s.id,
-				s.slug,
-				s.name,
-				s.domain,
-				s.approval_status,
-				s.status,
-				s.status_note,
-				count(sf.id) AS total_feed_count,
-				count(sf.id) FILTER (WHERE sf.status = 'active') AS active_feed_count,
-				max(sf.last_fetched_at) AS last_fetched_at,
-				(
-					array_remove(array_agg(sf.last_error ORDER BY sf.updated_at DESC), NULL)
-				)[1] AS last_error
-			FROM sources s
-			LEFT JOIN source_feeds sf ON sf.source_id = s.id
-			WHERE s.id = ${sourceId}
-			GROUP BY s.id
-			LIMIT 1
-		`),
+		db
+			.select({
+				id: sources.id,
+				slug: sources.slug,
+				name: sources.name,
+				domain: sources.domain,
+				approvalStatus: sources.approvalStatus,
+				status: sources.status,
+				statusNote: sources.statusNote,
+				totalFeedCount: sql<number>`count(${sourceFeeds.id})::int`,
+				activeFeedCount: sql<number>`count(${sourceFeeds.id}) FILTER (WHERE ${sourceFeeds.status} = 'active')::int`,
+				lastFetchedAt: sql<Date | string | null>`max(${sourceFeeds.lastFetchedAt})`,
+				lastError: lastErrorExpr
+			})
+			.from(sources)
+			.leftJoin(sourceFeeds, eq(sourceFeeds.sourceId, sources.id))
+			.where(eq(sources.id, sourceId))
+			.groupBy(
+				sources.id,
+				sources.slug,
+				sources.name,
+				sources.domain,
+				sources.approvalStatus,
+				sources.status,
+				sources.statusNote
+			)
+			.limit(1),
 		db.select({ id: categories.id, slug: categories.slug, name: categories.name }).from(categories).orderBy(categories.name),
 		db
 			.select({
@@ -104,14 +97,14 @@ export const load: PageServerLoad = async (event) => {
 			slug: source.slug,
 			name: source.name,
 			domain: source.domain,
-			approvalStatus: source.approval_status,
+			approvalStatus: source.approvalStatus,
 			status: source.status,
-			statusNote: source.status_note,
-			totalFeedCount: Number(source.total_feed_count),
-			activeFeedCount: Number(source.active_feed_count),
-			canConfigure: source.approval_status === 'approved',
-			lastFetchedAt: source.last_fetched_at ? toIsoString(source.last_fetched_at) : null,
-			lastError: source.last_error
+			statusNote: source.statusNote,
+			totalFeedCount: Number(source.totalFeedCount),
+			activeFeedCount: Number(source.activeFeedCount),
+			canConfigure: source.approvalStatus === 'approved',
+			lastFetchedAt: source.lastFetchedAt ? toIsoString(source.lastFetchedAt) : null,
+			lastError: source.lastError
 		},
 		selectedRules: ruleRows,
 		selectedFeeds: feedRows.map((feed) => ({
@@ -136,13 +129,16 @@ export const actions: Actions = {
 		}
 
 		const normalized = validation.data;
-		const [conflict] = await db.execute<{ id: number; slug: string; domain: string }>(sql`
-			SELECT id, slug, domain
-			FROM sources
-			WHERE id <> ${sourceId}
-				AND (slug = ${normalized.slug} OR domain = ${normalized.domain})
-			LIMIT 1
-		`);
+		const [conflict] = await db
+			.select({ id: sources.id, slug: sources.slug, domain: sources.domain })
+			.from(sources)
+			.where(
+				and(
+					ne(sources.id, sourceId),
+					or(eq(sources.slug, normalized.slug), eq(sources.domain, normalized.domain))
+				)
+			)
+			.limit(1);
 
 		if (conflict?.slug === normalized.slug) {
 			return fail(400, { action: 'updateSourceDetails', error: 'Ez a slug már foglalt.' });

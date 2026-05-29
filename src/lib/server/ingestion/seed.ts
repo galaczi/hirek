@@ -1,94 +1,127 @@
-import { sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne, notExists, sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
+import { articles, categories, sourceFeeds, sources } from '$lib/server/db/schema';
 import { seedCategories, seedFeeds, seedSources } from './seed-data';
 
 export async function seedSourceRegistry() {
 	for (const category of seedCategories) {
-		await db.execute(sql`
-			INSERT INTO categories (slug, name)
-			VALUES (${category.slug}, ${category.name})
-			ON CONFLICT (slug) DO UPDATE SET name = excluded.name
-		`);
+		await db
+			.insert(categories)
+			.values({ slug: category.slug, name: category.name })
+			.onConflictDoUpdate({
+				target: categories.slug,
+				set: { name: category.name }
+			});
 	}
 
 	for (const source of seedSources) {
-		const slugRows = await db.execute<{ id: number }>(sql`
-			SELECT id FROM sources WHERE slug = ${source.slug} LIMIT 1
-		`);
+		const [slugRow] = await db
+			.select({ id: sources.id })
+			.from(sources)
+			.where(eq(sources.slug, source.slug))
+			.limit(1);
 
-		if (slugRows[0]) {
-			await db.execute(sql`
-				UPDATE sources
-				SET
-					name = ${source.name},
-					domain = ${source.domain},
-					status = CASE
-						WHEN approval_status = 'approved' AND status = 'pending' THEN 'needs_rss'
-						ELSE status
-					END,
-					updated_at = now()
-				WHERE id = ${slugRows[0].id}
-			`);
-			await markDuplicateDomainSources(source.domain, slugRows[0].id, source.slug);
+		if (slugRow) {
+			await db
+				.update(sources)
+				.set({
+					name: source.name,
+					domain: source.domain,
+					status: sql`CASE
+						WHEN ${sources.approvalStatus} = 'approved' AND ${sources.status} = 'pending' THEN 'needs_rss'
+						ELSE ${sources.status}
+					END`,
+					updatedAt: sql`now()`
+				})
+				.where(eq(sources.id, slugRow.id));
+			await markDuplicateDomainSources(source.domain, slugRow.id, source.slug);
 			continue;
 		}
 
-		const domainRows = await db.execute<{ id: number }>(sql`
-			SELECT id FROM sources WHERE domain = ${source.domain} ORDER BY id LIMIT 1
-		`);
+		const [domainRow] = await db
+			.select({ id: sources.id })
+			.from(sources)
+			.where(eq(sources.domain, source.domain))
+			.orderBy(asc(sources.id))
+			.limit(1);
 
-		if (domainRows[0]) {
-			await db.execute(sql`
-				UPDATE sources
-				SET
-					slug = ${source.slug},
-					name = ${source.name},
-					domain = ${source.domain},
-					status = CASE
-						WHEN approval_status = 'approved' AND status = 'pending' THEN 'needs_rss'
-						ELSE status
-					END,
-					updated_at = now()
-				WHERE id = ${domainRows[0].id}
-			`);
-			await markDuplicateDomainSources(source.domain, domainRows[0].id, source.slug);
+		if (domainRow) {
+			await db
+				.update(sources)
+				.set({
+					slug: source.slug,
+					name: source.name,
+					domain: source.domain,
+					status: sql`CASE
+						WHEN ${sources.approvalStatus} = 'approved' AND ${sources.status} = 'pending' THEN 'needs_rss'
+						ELSE ${sources.status}
+					END`,
+					updatedAt: sql`now()`
+				})
+				.where(eq(sources.id, domainRow.id));
+			await markDuplicateDomainSources(source.domain, domainRow.id, source.slug);
 			continue;
 		}
 
-		await db.execute(sql`
-			INSERT INTO sources (slug, name, domain, approval_status, status, updated_at)
-			VALUES (${source.slug}, ${source.name}, ${source.domain}, 'approved', 'needs_rss', now())
-		`);
+		await db.insert(sources).values({
+			slug: source.slug,
+			name: source.name,
+			domain: source.domain,
+			approvalStatus: 'approved',
+			status: 'needs_rss',
+			updatedAt: sql`now()`
+		});
 	}
 
 	for (const feed of seedFeeds) {
-		const sourceRows = await db.execute<{ id: number }>(sql`
-			INSERT INTO sources (slug, name, domain, approval_status, status, updated_at)
-			VALUES (${feed.source.slug}, ${feed.source.name}, ${feed.source.domain}, 'approved', 'ingesting', now())
-			ON CONFLICT (slug) DO UPDATE SET
-				name = excluded.name,
-				domain = excluded.domain,
-				status = CASE
-					WHEN sources.approval_status = 'approved' THEN 'ingesting'
-					ELSE sources.status
-				END,
-				updated_at = now()
-			RETURNING id
-		`);
+		const [sourceRow] = await db
+			.insert(sources)
+			.values({
+				slug: feed.source.slug,
+				name: feed.source.name,
+				domain: feed.source.domain,
+				approvalStatus: 'approved',
+				status: 'ingesting',
+				updatedAt: sql`now()`
+			})
+			.onConflictDoUpdate({
+				target: sources.slug,
+				set: {
+					name: feed.source.name,
+					domain: feed.source.domain,
+					status: sql`CASE
+						WHEN ${sources.approvalStatus} = 'approved' THEN 'ingesting'
+						ELSE ${sources.status}
+					END`,
+					updatedAt: sql`now()`
+				}
+			})
+			.returning({ id: sources.id });
 
-		const categoryRows = await db.execute<{ id: number }>(sql`
-			SELECT id FROM categories WHERE slug = ${feed.categorySlug}
-		`);
+		const [categoryRow] = await db
+			.select({ id: categories.id })
+			.from(categories)
+			.where(eq(categories.slug, feed.categorySlug))
+			.limit(1);
 
-		await db.execute(sql`
-			INSERT INTO source_feeds (source_id, category_id, feed_url, status, updated_at)
-			VALUES (${sourceRows[0].id}, ${categoryRows[0]?.id ?? null}, ${feed.feedUrl}, 'active', now())
-			ON CONFLICT (feed_url) DO UPDATE SET
-				source_id = excluded.source_id,
-				category_id = excluded.category_id,
-				status = 'active',
-				updated_at = now()
-		`);
+		await db
+			.insert(sourceFeeds)
+			.values({
+				sourceId: sourceRow.id,
+				categoryId: categoryRow?.id ?? null,
+				feedUrl: feed.feedUrl,
+				status: 'active',
+				updatedAt: sql`now()`
+			})
+			.onConflictDoUpdate({
+				target: sourceFeeds.feedUrl,
+				set: {
+					sourceId: sourceRow.id,
+					categoryId: categoryRow?.id ?? null,
+					status: 'active',
+					updatedAt: sql`now()`
+				}
+			});
 	}
 
 	return {
@@ -99,20 +132,24 @@ export async function seedSourceRegistry() {
 }
 
 async function markDuplicateDomainSources(domain: string, canonicalId: number, canonicalSlug: string) {
-	await db.execute(sql`
-		UPDATE sources duplicate
-		SET
-			status = 'disabled',
-			status_note = ${`Duplicate source row superseded by ${canonicalSlug}.`},
-			updated_at = now()
-		WHERE duplicate.domain = ${domain}
-			AND duplicate.id <> ${canonicalId}
-			AND duplicate.status IN ('pending', 'needs_rss')
-			AND NOT EXISTS (
-				SELECT 1
-				FROM source_feeds sf
-				WHERE sf.source_id = duplicate.id
-					AND sf.status = 'active'
+	await db
+		.update(sources)
+		.set({
+			status: 'disabled',
+			statusNote: `Duplicate source row superseded by ${canonicalSlug}.`,
+			updatedAt: sql`now()`
+		})
+		.where(
+			and(
+				eq(sources.domain, domain),
+				ne(sources.id, canonicalId),
+				inArray(sources.status, ['pending', 'needs_rss']),
+				notExists(
+					db
+						.select({ id: sourceFeeds.id })
+						.from(sourceFeeds)
+						.where(and(eq(sourceFeeds.sourceId, sources.id), eq(sourceFeeds.status, 'active')))
+				)
 			)
-	`);
+		);
 }

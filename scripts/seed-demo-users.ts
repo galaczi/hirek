@@ -1,7 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { hashPassword } from 'better-auth/crypto';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import { and, eq } from 'drizzle-orm';
 import postgres from 'postgres';
+import {
+	account as accountTable,
+	sources as sourcesTable,
+	user as userTable
+} from '../src/lib/server/db/schema.ts';
 
 type DemoUser = {
 	email: string;
@@ -24,7 +31,8 @@ const adminPassword = process.env.DEMO_ADMIN_PASSWORD || 'hirek-admin-demo';
 const partnerPassword = process.env.DEMO_PARTNER_PASSWORD || 'hirek-partner-demo';
 const partnerSourceSlug = process.env.DEMO_PARTNER_SOURCE_SLUG || '24-hu';
 
-const sql = postgres(databaseUrl, { max: 1 });
+const client = postgres(databaseUrl, { max: 1 });
+const db = drizzle(client, { schema: { account: accountTable, sources: sourcesTable, user: userTable } });
 
 try {
 	const partnerSourceId = await ensurePartnerSource(partnerSourceSlug);
@@ -40,91 +48,97 @@ try {
 
 	console.log(`Partner demo source: ${partnerSourceSlug} (#${partnerSourceId}).`);
 } finally {
-	await sql.end();
+	await client.end();
 }
 
 async function ensurePartnerSource(slug: string) {
-	const existing = await sql<{ id: number }[]>`
-		SELECT id
-		FROM sources
-		WHERE slug = ${slug}
-		LIMIT 1
-	`;
+	const [existing] = await db
+		.select({ id: sourcesTable.id })
+		.from(sourcesTable)
+		.where(eq(sourcesTable.slug, slug))
+		.limit(1);
+	if (existing) return existing.id;
 
-	if (existing[0]) return existing[0].id;
+	const [inserted] = await db
+		.insert(sourcesTable)
+		.values({
+			slug,
+			name: '24.hu',
+			domain: '24.hu',
+			status: 'needs_rss',
+			updatedAt: new Date()
+		})
+		.onConflictDoUpdate({
+			target: sourcesTable.slug,
+			set: { updatedAt: new Date() }
+		})
+		.returning({ id: sourcesTable.id });
 
-	const inserted = await sql<{ id: number }[]>`
-		INSERT INTO sources (slug, name, domain, status, updated_at)
-		VALUES (${slug}, '24.hu', '24.hu', 'needs_rss', now())
-		ON CONFLICT (slug) DO UPDATE SET updated_at = now()
-		RETURNING id
-	`;
-
-	return inserted[0].id;
+	return inserted.id;
 }
 
-async function upsertUser(user: DemoUser) {
+async function upsertUser(demoUser: DemoUser) {
 	const now = new Date();
-	const existing = await sql<{ id: string }[]>`
-		SELECT id
-		FROM "user"
-		WHERE email = ${user.email}
-		LIMIT 1
-	`;
-	const userId = existing[0]?.id ?? randomUUID();
-	const passwordHash = await hashPassword(user.password);
-	const name = user.email.split('@')[0];
+	const [existing] = await db
+		.select({ id: userTable.id })
+		.from(userTable)
+		.where(eq(userTable.email, demoUser.email))
+		.limit(1);
+	const userId = existing?.id ?? randomUUID();
+	const passwordHash = await hashPassword(demoUser.password);
+	const name = demoUser.email.split('@')[0];
 
-	if (existing[0]) {
-		await sql`
-			UPDATE "user"
-			SET
-				name = ${name},
-				email_verified = true,
-				role = ${user.role},
-				source_id = ${user.sourceId},
-				updated_at = ${now}
-			WHERE id = ${userId}
-		`;
+	if (existing) {
+		await db
+			.update(userTable)
+			.set({
+				name,
+				emailVerified: true,
+				role: demoUser.role,
+				sourceId: demoUser.sourceId,
+				updatedAt: now
+			})
+			.where(eq(userTable.id, userId));
 	} else {
-		await sql`
-			INSERT INTO "user" (
-				id, name, email, email_verified, role, source_id, created_at, updated_at
-			)
-			VALUES (
-				${userId}, ${name}, ${user.email}, true, ${user.role}, ${user.sourceId}, ${now}, ${now}
-			)
-		`;
+		await db.insert(userTable).values({
+			id: userId,
+			name,
+			email: demoUser.email,
+			emailVerified: true,
+			role: demoUser.role,
+			sourceId: demoUser.sourceId,
+			createdAt: now,
+			updatedAt: now
+		});
 	}
 
-	const credentialAccount = await sql<{ id: string }[]>`
-		SELECT id
-		FROM "account"
-		WHERE user_id = ${userId}
-			AND provider_id = 'credential'
-		LIMIT 1
-	`;
+	const [credentialAccount] = await db
+		.select({ id: accountTable.id })
+		.from(accountTable)
+		.where(and(eq(accountTable.userId, userId), eq(accountTable.providerId, 'credential')))
+		.limit(1);
 
-	if (credentialAccount[0]) {
-		await sql`
-			UPDATE "account"
-			SET
-				account_id = ${userId},
-				password = ${passwordHash},
-				updated_at = ${now}
-			WHERE id = ${credentialAccount[0].id}
-		`;
+	if (credentialAccount) {
+		await db
+			.update(accountTable)
+			.set({
+				accountId: userId,
+				password: passwordHash,
+				updatedAt: now
+			})
+			.where(eq(accountTable.id, credentialAccount.id));
 		return;
 	}
 
-	await sql`
-		INSERT INTO "account" (
-			id, account_id, provider_id, user_id, password, created_at, updated_at
-		)
-		VALUES (
-			${randomUUID()}, ${userId}, 'credential', ${userId}, ${passwordHash}, ${now}, ${now}
-		)
-	`;
+	await db.insert(accountTable).values({
+		id: randomUUID(),
+		accountId: userId,
+		providerId: 'credential',
+		userId,
+		password: passwordHash,
+		createdAt: now,
+		updatedAt: now
+	});
 }
 
 function loadDotenv() {

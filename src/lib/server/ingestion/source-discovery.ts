@@ -1,5 +1,6 @@
-import { sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, notExists, sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
+import { articles, categories, sourceFeeds, sources } from '$lib/server/db/schema';
 import { seedCategories } from './seed-data';
 import { parseFeed } from './rss';
 
@@ -62,11 +63,13 @@ type FeedProbeResult = {
 
 export async function discoverHirkeresoSources() {
 	for (const category of seedCategories) {
-		await db.execute(sql`
-			INSERT INTO categories (slug, name)
-			VALUES (${category.slug}, ${category.name})
-			ON CONFLICT (slug) DO UPDATE SET name = excluded.name
-		`);
+		await db
+			.insert(categories)
+			.values({ slug: category.slug, name: category.name })
+			.onConflictDoUpdate({
+				target: categories.slug,
+				set: { name: category.name }
+			});
 	}
 
 	const discovered = new Map<string, DiscoveredSource>();
@@ -104,24 +107,45 @@ export async function discoverHirkeresoSources() {
 	}
 
 	if (discovered.size > 0) {
-		await db.execute(sql`
-			DELETE FROM sources s
-			WHERE s.approval_status = 'approved'
-				AND s.status = 'pending'
-				AND NOT EXISTS (SELECT 1 FROM articles a WHERE a.source_id = s.id)
-				AND NOT EXISTS (SELECT 1 FROM source_feeds sf WHERE sf.source_id = s.id)
-		`);
+		await db.delete(sources).where(
+			and(
+				eq(sources.approvalStatus, 'approved'),
+				eq(sources.status, 'pending'),
+				notExists(
+					db
+						.select({ id: articles.id })
+						.from(articles)
+						.where(eq(articles.sourceId, sources.id))
+				),
+				notExists(
+					db
+						.select({ id: sourceFeeds.id })
+						.from(sourceFeeds)
+						.where(eq(sourceFeeds.sourceId, sources.id))
+				)
+			)
+		);
 	}
 
 	for (const source of discovered.values()) {
-		await db.execute(sql`
-			INSERT INTO sources (slug, name, domain, approval_status, status, updated_at)
-			VALUES (${source.slug}, ${source.name}, ${source.domain}, 'approved', 'pending', now())
-			ON CONFLICT (slug) DO UPDATE SET
-				name = excluded.name,
-				domain = excluded.domain,
-				updated_at = now()
-		`);
+		await db
+			.insert(sources)
+			.values({
+				slug: source.slug,
+				name: source.name,
+				domain: source.domain,
+				approvalStatus: 'approved',
+				status: 'pending',
+				updatedAt: sql`now()`
+			})
+			.onConflictDoUpdate({
+				target: sources.slug,
+				set: {
+					name: source.name,
+					domain: source.domain,
+					updatedAt: sql`now()`
+				}
+			});
 	}
 
 	return {
@@ -140,26 +164,29 @@ export async function discoverHirkeresoSources() {
 }
 
 export async function discoverMissingSourceFeeds(limit = 20) {
-	const rows = await db.execute<{
-		id: number;
-		slug: string;
-		name: string;
-		domain: string;
-		status: string;
-	}>(sql`
-		SELECT s.id, s.slug, s.name, s.domain, s.status
-		FROM sources s
-		WHERE s.approval_status = 'approved'
-			AND s.status IN ('needs_rss', 'pending')
-			AND NOT EXISTS (
-				SELECT 1
-				FROM source_feeds sf
-				WHERE sf.source_id = s.id
-					AND sf.status = 'active'
+	const rows = await db
+		.select({
+			id: sources.id,
+			slug: sources.slug,
+			name: sources.name,
+			domain: sources.domain,
+			status: sources.status
+		})
+		.from(sources)
+		.where(
+			and(
+				eq(sources.approvalStatus, 'approved'),
+				inArray(sources.status, ['needs_rss', 'pending']),
+				notExists(
+					db
+						.select({ id: sourceFeeds.id })
+						.from(sourceFeeds)
+						.where(and(eq(sourceFeeds.sourceId, sources.id), eq(sourceFeeds.status, 'active')))
+				)
 			)
-		ORDER BY s.name ASC
-		LIMIT ${limit}
-	`);
+		)
+		.orderBy(asc(sources.name))
+		.limit(limit);
 
 	const results: FeedProbeResult[] = [];
 	for (const source of rows) {
@@ -167,31 +194,47 @@ export async function discoverMissingSourceFeeds(limit = 20) {
 		results.push(result);
 
 		if (result.feedUrl) {
-			await db.execute(sql`
-				INSERT INTO source_feeds (source_id, feed_url, status, last_error, updated_at)
-				VALUES (${source.id}, ${result.feedUrl}, 'active', NULL, now())
-				ON CONFLICT (feed_url) DO UPDATE SET
-					source_id = excluded.source_id,
-					status = 'active',
-					last_error = NULL,
-					updated_at = now()
-			`);
-			await db.execute(sql`
-				UPDATE sources
-				SET status = 'ingesting', status_note = NULL, updated_at = now()
-				WHERE id = ${source.id}
-			`);
+			await db
+				.insert(sourceFeeds)
+				.values({
+					sourceId: source.id,
+					feedUrl: result.feedUrl,
+					status: 'active',
+					lastError: null,
+					updatedAt: sql`now()`
+				})
+				.onConflictDoUpdate({
+					target: sourceFeeds.feedUrl,
+					set: {
+						sourceId: source.id,
+						status: 'active',
+						lastError: null,
+						updatedAt: sql`now()`
+					}
+				});
+			await db
+				.update(sources)
+				.set({
+					status: 'ingesting',
+					statusNote: null,
+					updatedAt: sql`now()`
+				})
+				.where(eq(sources.id, source.id));
 		} else {
-			await db.execute(sql`
-				UPDATE sources
-				SET
-					status = 'needs_adapter',
-					status_note = ${result.error ?? 'No RSS/Atom feed found at common endpoints.'},
-					updated_at = now()
-				WHERE id = ${source.id}
-					AND approval_status = 'approved'
-					AND status IN ('needs_rss', 'pending')
-			`);
+			await db
+				.update(sources)
+				.set({
+					status: 'needs_adapter',
+					statusNote: result.error ?? 'No RSS/Atom feed found at common endpoints.',
+					updatedAt: sql`now()`
+				})
+				.where(
+					and(
+						eq(sources.id, source.id),
+						eq(sources.approvalStatus, 'approved'),
+						inArray(sources.status, ['needs_rss', 'pending'])
+					)
+				);
 		}
 	}
 

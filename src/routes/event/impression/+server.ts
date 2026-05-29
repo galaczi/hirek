@@ -1,19 +1,13 @@
 import { error, json, type RequestHandler } from '@sveltejs/kit';
-import { sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { classifyRequest } from '$lib/server/articles/click-tracking';
 import { db } from '$lib/server/db';
-import { impressionEvents } from '$lib/server/db/schema';
+import { articleCategories, articles, impressionEvents } from '$lib/server/db/schema';
 import { normalizeImpressionPayload } from '$lib/server/validation/input';
 
 type ImpressionPayload = {
 	articleIds?: unknown;
 	pagePath?: unknown;
-};
-
-type ImpressionArticleRow = {
-	id: number;
-	source_id: number;
-	category_id: number | null;
 };
 
 export const POST: RequestHandler = async ({ request, getClientAddress }) => {
@@ -26,22 +20,16 @@ export const POST: RequestHandler = async ({ request, getClientAddress }) => {
 	});
 	if (!normalized.ok) error(400, 'No article ids provided.');
 	const { articleIds, pagePath, referrer, userAgent } = normalized.data;
-	const articleIdSql = sql.join(
-		articleIds.map((id) => sql`${id}`),
-		sql`, `
-	);
-
-	const rows = await db.execute<ImpressionArticleRow>(sql`
-		SELECT
-			a.id,
-			a.source_id,
-			(array_remove(array_agg(ac.category_id), NULL))[1] AS category_id
-		FROM articles a
-		LEFT JOIN article_categories ac ON ac.article_id = a.id
-		WHERE a.active = true
-			AND a.id IN (${articleIdSql})
-		GROUP BY a.id
-	`);
+	const rows = await db
+		.select({
+			id: articles.id,
+			sourceId: articles.sourceId,
+			categoryId: sql<number | null>`(array_remove(array_agg(${articleCategories.categoryId}), NULL))[1]`
+		})
+		.from(articles)
+		.leftJoin(articleCategories, eq(articleCategories.articleId, articles.id))
+		.where(and(eq(articles.active, true), inArray(articles.id, articleIds)))
+		.groupBy(articles.id, articles.sourceId);
 
 	if (rows.length === 0) return json({ ok: true, inserted: 0 });
 
@@ -53,8 +41,8 @@ export const POST: RequestHandler = async ({ request, getClientAddress }) => {
 	await db.insert(impressionEvents).values(
 		rows.map((row) => ({
 			articleId: row.id,
-			sourceId: row.source_id,
-			categoryId: row.category_id,
+			sourceId: row.sourceId,
+			categoryId: row.categoryId,
 			pagePath,
 			referrer,
 			userAgent,

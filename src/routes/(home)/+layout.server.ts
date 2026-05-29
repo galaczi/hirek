@@ -1,23 +1,12 @@
 import { error, redirect } from '@sveltejs/kit';
-import { sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import type { LayoutServerLoad } from './$types';
 import { db } from '$lib/server/db';
+import { articleCategories, articles, categories, sources } from '$lib/server/db/schema';
 import type { Article, Category, Publisher } from '$lib/home/data';
 import { getCategoryBySlug, getSourceBySlug } from '$lib/server/articles/list';
 import { searchArticles } from '$lib/server/search';
 import type { SearchFilters, SearchResponse, SearchResult } from '$lib/server/search/types';
-
-type ArticleRow = {
-	id: number;
-	title: string;
-	source_slug: string;
-	source_name: string;
-	category_slug: string | null;
-	category_name: string | null;
-	category_slugs: string[];
-	published_at: Date | string;
-	click_score: number;
-};
 
 type CategoryRow = Category & {
 	count: string | number;
@@ -53,8 +42,8 @@ export const load: LayoutServerLoad = async ({ params, url }) => {
 	try {
 		const shouldSearch = Boolean(q || filters.category || filters.source || filters.time);
 		const [streamRows, topRows, categoryRows, sourceRows, totalRows, search] = await Promise.all([
-			getArticles('published_at DESC, click_score DESC', 80, filters),
-			getArticles('click_score DESC, published_at DESC', 24),
+			getArticles('fresh', 80, filters),
+			getArticles('top', 24),
 			getCategories(),
 			getSources(),
 			getTotalArticles(),
@@ -171,46 +160,57 @@ function cleanFilter(value: string | null) {
 	return clean && clean !== 'all' ? clean : undefined;
 }
 
-async function getArticles(orderBy: string, limit: number, filters: HomeFilters = {}) {
-	const where = [sql`a.active = true`];
-	if (filters.source) where.push(sql`s.slug = ${filters.source}`);
+async function getArticles(orderBy: 'fresh' | 'top', limit: number, filters: HomeFilters = {}) {
+	const conditions = [eq(articles.active, true)];
+	if (filters.source) conditions.push(eq(sources.slug, filters.source));
 	if (filters.category) {
-		where.push(sql`EXISTS (
-			SELECT 1
-			FROM article_categories ac_filter
-			INNER JOIN categories c_filter ON c_filter.id = ac_filter.category_id
-			WHERE ac_filter.article_id = a.id
-				AND c_filter.slug = ${filters.category}
-		)`);
+		conditions.push(
+			inArray(
+				articles.id,
+				db
+					.select({ articleId: articleCategories.articleId })
+					.from(articleCategories)
+					.innerJoin(categories, eq(categories.id, articleCategories.categoryId))
+					.where(eq(categories.slug, filters.category))
+			)
+		);
 	}
 
 	const since = getTimeBoundary(filters.time);
-	if (since) where.push(sql`a.published_at >= ${since.toISOString()}::timestamptz`);
+	if (since) conditions.push(sql`${articles.publishedAt} >= ${since.toISOString()}::timestamptz`);
 
-	return db.execute<ArticleRow>(sql`
-		SELECT
-			a.id,
-			a.title,
-			s.slug AS source_slug,
-			s.name AS source_name,
-			(
-				array_remove(array_agg(DISTINCT c.slug), NULL)
-			)[1] AS category_slug,
-			(
-				array_remove(array_agg(DISTINCT c.name), NULL)
-			)[1] AS category_name,
-			array_remove(array_agg(DISTINCT c.slug), NULL) AS category_slugs,
-			a.published_at,
-			a.click_score
-		FROM articles a
-		INNER JOIN sources s ON s.id = a.source_id
-		LEFT JOIN article_categories ac ON ac.article_id = a.id
-		LEFT JOIN categories c ON c.id = ac.category_id
-		WHERE ${sql.join(where, sql` AND `)}
-		GROUP BY a.id, s.id
-		ORDER BY ${sql.raw(orderBy)}
-		LIMIT ${limit}
-	`);
+	return db
+		.select({
+			id: articles.id,
+			title: articles.title,
+			sourceSlug: sources.slug,
+			sourceName: sources.name,
+			categorySlug: sql<string | null>`(array_remove(array_agg(DISTINCT ${categories.slug}), NULL))[1]`,
+			categoryName: sql<string | null>`(array_remove(array_agg(DISTINCT ${categories.name}), NULL))[1]`,
+			categorySlugs: sql<string[]>`array_remove(array_agg(DISTINCT ${categories.slug}), NULL)`,
+			publishedAt: articles.publishedAt,
+			clickScore: articles.clickScore
+		})
+		.from(articles)
+		.innerJoin(sources, eq(sources.id, articles.sourceId))
+		.leftJoin(articleCategories, eq(articleCategories.articleId, articles.id))
+		.leftJoin(categories, eq(categories.id, articleCategories.categoryId))
+		.where(and(...conditions))
+		.groupBy(
+			articles.id,
+			articles.title,
+			articles.publishedAt,
+			articles.clickScore,
+			sources.id,
+			sources.slug,
+			sources.name
+		)
+		.orderBy(
+			...(orderBy === 'top'
+				? [desc(articles.clickScore), desc(articles.publishedAt)]
+				: [desc(articles.publishedAt), desc(articles.clickScore)])
+		)
+		.limit(limit);
 }
 
 function getTimeBoundary(time: HomeFilters['time']) {
@@ -227,44 +227,61 @@ function getTimeBoundary(time: HomeFilters['time']) {
 }
 
 async function getCategories() {
-	return db.execute<CategoryRow>(sql`
-		SELECT c.slug, c.name, count(a.id) AS count
-		FROM categories c
-		LEFT JOIN article_categories ac ON ac.category_id = c.id
-		LEFT JOIN articles a ON a.id = ac.article_id AND a.active = true
-		GROUP BY c.id
-		ORDER BY c.name ASC
-	`);
+	return db
+		.select({
+			slug: categories.slug,
+			name: categories.name,
+			count: sql<number>`count(${articles.id})::int`
+		})
+		.from(categories)
+		.leftJoin(articleCategories, eq(articleCategories.categoryId, categories.id))
+		.leftJoin(articles, and(eq(articles.id, articleCategories.articleId), eq(articles.active, true)))
+		.groupBy(categories.id, categories.slug, categories.name)
+		.orderBy(asc(categories.name));
 }
 
 async function getSources() {
-	return db.execute<SourceRow>(sql`
-		SELECT slug, name, domain AS host
-		FROM sources
-		WHERE status != 'disabled'
-		ORDER BY name ASC
-	`);
+	return db
+		.select({
+			slug: sources.slug,
+			name: sources.name,
+			host: sources.domain
+		})
+		.from(sources)
+		.where(ne(sources.status, 'disabled'))
+		.orderBy(asc(sources.name));
 }
 
 async function getTotalArticles() {
-	return db.execute<{ count: string | number }>(sql`
-		SELECT count(*) AS count
-		FROM articles
-		WHERE active = true
-	`);
+	return db
+		.select({
+			count: sql<number>`count(*)::int`
+		})
+		.from(articles)
+		.where(eq(articles.active, true));
 }
 
-function toArticle(row: ArticleRow): Article {
+function toArticle(row: {
+	id: number;
+	title: string;
+	sourceSlug: string;
+	sourceName: string;
+	categorySlug: string | null;
+	categoryName: string | null;
+	categorySlugs: string[] | null;
+	publishedAt: Date | string;
+	clickScore: number;
+}): Article {
 	return {
 		id: row.id,
 		title: row.title,
-		category: row.category_slug ?? 'uncategorized',
-		categoryName: row.category_name ?? 'Egyéb',
-		categorySlugs: row.category_slugs ?? [],
-		source: row.source_slug,
-		sourceName: row.source_name,
-		publishedAt: toIsoString(row.published_at),
-		clicks: row.click_score
+		category: row.categorySlug ?? 'uncategorized',
+		categoryName: row.categoryName ?? 'Egyéb',
+		categorySlugs: row.categorySlugs ?? [],
+		source: row.sourceSlug,
+		sourceName: row.sourceName,
+		publishedAt: toIsoString(row.publishedAt),
+		clicks: row.clickScore
 	};
 }
 

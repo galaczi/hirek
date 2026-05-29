@@ -1,9 +1,9 @@
 import { fail, type Actions } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
-import { eq, sql } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 import { requireAdmin } from '$lib/server/admin/auth';
 import { db } from '$lib/server/db';
-import { sources } from '$lib/server/db/schema';
+import { articles, clickEvents, sourceFeeds, sources } from '$lib/server/db/schema';
 import { seedSources } from '$lib/server/ingestion/seed-data';
 
 const SOURCE_STATUSES = new Set([
@@ -17,25 +17,6 @@ const SOURCE_STATUSES = new Set([
 const PARTNER_PACKAGES = new Set(['free', 'partner', 'growth']);
 const PARTNER_STATUSES = new Set(['none', 'trial', 'active', 'paused', 'cancelled']);
 
-type SourceRegistryRow = {
-	id: number;
-	slug: string;
-	name: string;
-	domain: string;
-	approval_status: string;
-	status: string;
-	status_note: string | null;
-	partner_package: string;
-	partner_status: string;
-	traffic_target: number;
-	feed_count: string | number;
-	active_feed_count: string | number;
-	last_fetched_at: Date | string | null;
-	last_error: string | null;
-	article_count: string | number;
-	click_count: string | number;
-};
-
 export const load: PageServerLoad = async (event) => {
 	requireAdmin(event);
 
@@ -44,93 +25,119 @@ export const load: PageServerLoad = async (event) => {
 		expectedSourceSlugs.map((slug) => sql`${slug}`),
 		sql`, `
 	);
+	const lastErrorExpr = sql<string | null>`(array_remove(array_agg(${sourceFeeds.lastError} ORDER BY ${sourceFeeds.updatedAt} DESC), NULL))[1]`;
 
 	const [sourceStats, feedStats, totals, launchGateRows, sourceRegistry] = await Promise.all([
-		db.execute<{ status: string; count: string | number }>(sql`
-			SELECT status, count(*) AS count
-			FROM sources
-			GROUP BY status
-			ORDER BY status ASC
-		`),
-		db.execute<{ status: string; count: string | number }>(sql`
-			SELECT status, count(*) AS count
-			FROM source_feeds
-			GROUP BY status
-			ORDER BY status ASC
-		`),
-		db.execute<{
-			sources: string | number;
-			articles: string | number;
-			clicks: string | number;
-			partners: string | number;
-		}>(sql`
-			SELECT
-				(SELECT count(*) FROM sources) AS sources,
-				(SELECT count(*) FROM articles WHERE active = true) AS articles,
-				(SELECT count(*) FROM click_events) AS clicks,
-				(SELECT count(*) FROM sources WHERE partner_status != 'none') AS partners
-		`),
-		db.execute<{
-			registered_sources: string | number;
-			live_sources: string | number;
-			active_feed_sources: string | number;
-			blocked_with_reason: string | number;
-			needs_work: string | number;
-		}>(sql`
-			SELECT
-				count(DISTINCT s.id) FILTER (WHERE s.slug IN (${expectedSourceSql})) AS registered_sources,
-				count(DISTINCT s.id) FILTER (WHERE s.slug IN (${expectedSourceSql}) AND s.status = 'ingesting') AS live_sources,
-				count(DISTINCT s.id) FILTER (
-					WHERE s.slug IN (${expectedSourceSql})
-						AND sf.status = 'active'
-				) AS active_feed_sources,
-				count(DISTINCT s.id) FILTER (
-					WHERE s.slug IN (${expectedSourceSql})
-						AND s.status = 'blocked'
-						AND nullif(trim(coalesce(s.status_note, '')), '') IS NOT NULL
-				) AS blocked_with_reason,
-				count(DISTINCT s.id) FILTER (
-					WHERE s.slug IN (${expectedSourceSql})
+		db
+			.select({
+				status: sources.status,
+				count: sql<number>`count(*)::int`
+			})
+			.from(sources)
+			.groupBy(sources.status)
+			.orderBy(asc(sources.status)),
+		db
+			.select({
+				status: sourceFeeds.status,
+				count: sql<number>`count(*)::int`
+			})
+			.from(sourceFeeds)
+			.groupBy(sourceFeeds.status)
+			.orderBy(asc(sourceFeeds.status)),
+		(async () => {
+			const [sourceRows, articleRows, clickRows, partnerRows] = await Promise.all([
+				db.select({ count: sql<number>`count(*)::int` }).from(sources),
+				db
+					.select({ count: sql<number>`count(*)::int` })
+					.from(articles)
+					.where(eq(articles.active, true)),
+				db.select({ count: sql<number>`count(*)::int` }).from(clickEvents),
+				db
+					.select({ count: sql<number>`count(*)::int` })
+					.from(sources)
+					.where(sql`${sources.partnerStatus} != 'none'`)
+			]);
+
+			return {
+				sources: Number(sourceRows[0]?.count ?? 0),
+				articles: Number(articleRows[0]?.count ?? 0),
+				clicks: Number(clickRows[0]?.count ?? 0),
+				partners: Number(partnerRows[0]?.count ?? 0)
+			};
+		})(),
+		db
+			.select({
+				registeredSources: sql<number>`count(DISTINCT ${sources.id}) FILTER (WHERE ${sources.slug} IN (${expectedSourceSql}))::int`,
+				liveSources: sql<number>`count(DISTINCT ${sources.id}) FILTER (WHERE ${sources.slug} IN (${expectedSourceSql}) AND ${sources.status} = 'ingesting')::int`,
+				activeFeedSources: sql<number>`count(DISTINCT ${sources.id}) FILTER (WHERE ${sources.slug} IN (${expectedSourceSql}) AND ${sourceFeeds.status} = 'active')::int`,
+				blockedWithReason: sql<number>`count(DISTINCT ${sources.id}) FILTER (
+					WHERE ${sources.slug} IN (${expectedSourceSql})
+						AND ${sources.status} = 'blocked'
+						AND nullif(trim(coalesce(${sources.statusNote}, '')), '') IS NOT NULL
+				)::int`,
+				needsWork: sql<number>`count(DISTINCT ${sources.id}) FILTER (
+					WHERE ${sources.slug} IN (${expectedSourceSql})
 						AND (
-							s.status IN ('needs_rss', 'needs_adapter', 'pending', 'disabled')
-							OR (s.status = 'blocked' AND nullif(trim(coalesce(s.status_note, '')), '') IS NULL)
+							${sources.status} IN ('needs_rss', 'needs_adapter', 'pending', 'disabled')
+							OR (${sources.status} = 'blocked' AND nullif(trim(coalesce(${sources.statusNote}, '')), '') IS NULL)
 						)
-				) AS needs_work
-			FROM sources s
-			LEFT JOIN source_feeds sf ON sf.source_id = s.id
-		`),
-		db.execute<SourceRegistryRow>(sql`
-			SELECT
-				s.id,
-				s.slug,
-				s.name,
-				s.domain,
-				s.approval_status,
-				s.status,
-				s.status_note,
-				s.partner_package,
-				s.partner_status,
-				s.traffic_target,
-				count(sf.id) AS feed_count,
-				count(sf.id) FILTER (WHERE sf.status = 'active') AS active_feed_count,
-				max(sf.last_fetched_at) AS last_fetched_at,
-				(array_remove(array_agg(sf.last_error ORDER BY sf.updated_at DESC), NULL))[1] AS last_error,
-				(SELECT count(*) FROM articles a WHERE a.source_id = s.id AND a.active = true) AS article_count,
-				(SELECT count(*) FROM click_events ce WHERE ce.source_id = s.id) AS click_count
-			FROM sources s
-			LEFT JOIN source_feeds sf ON sf.source_id = s.id
-			GROUP BY s.id
-			ORDER BY
-				CASE s.status
+				)::int`
+			})
+			.from(sources)
+			.leftJoin(sourceFeeds, eq(sourceFeeds.sourceId, sources.id)),
+		db
+			.select({
+				id: sources.id,
+				slug: sources.slug,
+				name: sources.name,
+				domain: sources.domain,
+				approvalStatus: sources.approvalStatus,
+				status: sources.status,
+				statusNote: sources.statusNote,
+				partnerPackage: sources.partnerPackage,
+				partnerStatus: sources.partnerStatus,
+				trafficTarget: sources.trafficTarget,
+				feedCount: sql<number>`count(${sourceFeeds.id})::int`,
+				activeFeedCount: sql<number>`count(${sourceFeeds.id}) FILTER (WHERE ${sourceFeeds.status} = 'active')::int`,
+				lastFetchedAt: sql<Date | string | null>`max(${sourceFeeds.lastFetchedAt})`,
+				lastError: lastErrorExpr,
+				articleCount: sql<number>`(
+					SELECT count(*)::int
+					FROM ${articles}
+					WHERE ${articles.sourceId} = ${sources.id}
+						AND ${articles.active} = true
+				)`,
+				clickCount: sql<number>`(
+					SELECT count(*)::int
+					FROM ${clickEvents}
+					WHERE ${clickEvents.sourceId} = ${sources.id}
+				)`
+			})
+			.from(sources)
+			.leftJoin(sourceFeeds, eq(sourceFeeds.sourceId, sources.id))
+			.groupBy(
+				sources.id,
+				sources.slug,
+				sources.name,
+				sources.domain,
+				sources.approvalStatus,
+				sources.status,
+				sources.statusNote,
+				sources.partnerPackage,
+				sources.partnerStatus,
+				sources.trafficTarget
+			)
+			.orderBy(
+				sql`CASE ${sources.status}
 					WHEN 'blocked' THEN 1
 					WHEN 'needs_adapter' THEN 2
 					WHEN 'needs_rss' THEN 3
 					WHEN 'pending' THEN 4
 					WHEN 'ingesting' THEN 5
 					ELSE 6
-				END,
-				s.name ASC
-		`)
+				END`,
+				asc(sources.name)
+			)
 	]);
 
 	return {
@@ -138,35 +145,30 @@ export const load: PageServerLoad = async (event) => {
 		feedStats: feedStats.map((row) => ({ status: row.status, count: Number(row.count) })),
 		launchGate: {
 			expectedSources: seedSources.length,
-			registeredSources: Number(launchGateRows[0]?.registered_sources ?? 0),
-			liveSources: Number(launchGateRows[0]?.live_sources ?? 0),
-			activeFeedSources: Number(launchGateRows[0]?.active_feed_sources ?? 0),
-			blockedWithReason: Number(launchGateRows[0]?.blocked_with_reason ?? 0),
-			needsWork: Number(launchGateRows[0]?.needs_work ?? 0)
+			registeredSources: Number(launchGateRows[0]?.registeredSources ?? 0),
+			liveSources: Number(launchGateRows[0]?.liveSources ?? 0),
+			activeFeedSources: Number(launchGateRows[0]?.activeFeedSources ?? 0),
+			blockedWithReason: Number(launchGateRows[0]?.blockedWithReason ?? 0),
+			needsWork: Number(launchGateRows[0]?.needsWork ?? 0)
 		},
-		totals: {
-			sources: Number(totals[0]?.sources ?? 0),
-			articles: Number(totals[0]?.articles ?? 0),
-			clicks: Number(totals[0]?.clicks ?? 0),
-			partners: Number(totals[0]?.partners ?? 0)
-		},
+		totals,
 		sourceRegistry: sourceRegistry.map((row) => ({
 			id: row.id,
 			slug: row.slug,
 			name: row.name,
 			domain: row.domain,
-			approvalStatus: row.approval_status,
+			approvalStatus: row.approvalStatus,
 			status: row.status,
-			statusNote: row.status_note,
-			partnerPackage: row.partner_package,
-			partnerStatus: row.partner_status,
-			trafficTarget: Number(row.traffic_target),
-			feedCount: Number(row.feed_count),
-			activeFeedCount: Number(row.active_feed_count),
-			lastFetchedAt: row.last_fetched_at ? toIsoString(row.last_fetched_at) : null,
-			lastError: row.last_error,
-			articleCount: Number(row.article_count),
-			clickCount: Number(row.click_count)
+			statusNote: row.statusNote,
+			partnerPackage: row.partnerPackage,
+			partnerStatus: row.partnerStatus,
+			trafficTarget: Number(row.trafficTarget),
+			feedCount: Number(row.feedCount),
+			activeFeedCount: Number(row.activeFeedCount),
+			lastFetchedAt: row.lastFetchedAt ? toIsoString(row.lastFetchedAt) : null,
+			lastError: row.lastError,
+			articleCount: Number(row.articleCount),
+			clickCount: Number(row.clickCount)
 		}))
 	};
 };

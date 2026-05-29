@@ -1,5 +1,5 @@
 import { redirect } from '@sveltejs/kit';
-import { and, eq, ne, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, ilike, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { Actions, PageServerLoad } from './$types';
 import { requireAdmin } from '$lib/server/admin/auth';
 import { isUniqueViolation } from '$lib/server/db/errors';
@@ -12,19 +12,6 @@ import {
 	validateAdminSourceCreateInput,
 	type ValidationFailure
 } from '$lib/server/validation/input';
-
-type SourceRow = {
-	id: number;
-	slug: string;
-	name: string;
-	domain: string;
-	status: string;
-	status_note: string | null;
-	total_feed_count: string | number;
-	active_feed_count: string | number;
-	last_fetched_at: Date | string | null;
-	last_error: string | null;
-};
 
 type SourceFilters = {
 	q: string;
@@ -39,39 +26,37 @@ export const load: PageServerLoad = async (event) => {
 	const page = parsePage(event.url.searchParams.get('page'));
 	const where = buildWhere(filters);
 	const offset = (page - 1) * PAGE_SIZE;
+	const lastErrorExpr = sql<string | null>`(array_remove(array_agg(${sourceFeeds.lastError} ORDER BY ${sourceFeeds.updatedAt} DESC), NULL))[1]`;
 
 	const [sourceRows, totalRows, statusRows] = await Promise.all([
-		db.execute<SourceRow>(sql`
-			SELECT
-				s.id,
-				s.slug,
-				s.name,
-				s.domain,
-				s.status,
-				s.status_note,
-				count(sf.id) AS total_feed_count,
-				count(sf.id) FILTER (WHERE sf.status = 'active') AS active_feed_count,
-				max(sf.last_fetched_at) AS last_fetched_at,
-				(
-					array_remove(array_agg(sf.last_error ORDER BY sf.updated_at DESC), NULL)
-				)[1] AS last_error
-			FROM sources s
-			LEFT JOIN source_feeds sf ON sf.source_id = s.id
-			${where ? sql`WHERE ${where}` : sql``}
-			GROUP BY s.id
-			ORDER BY s.name ASC
-			LIMIT ${PAGE_SIZE}
-			OFFSET ${offset}
-		`),
-		db.execute<{ count: string | number }>(sql`
-			SELECT count(*) AS count
-			FROM sources s
-			${where ? sql`WHERE ${where}` : sql``}
-		`),
+		db
+			.select({
+				id: sources.id,
+				slug: sources.slug,
+				name: sources.name,
+				domain: sources.domain,
+				status: sources.status,
+				statusNote: sources.statusNote,
+				totalFeedCount: sql<number>`count(${sourceFeeds.id})::int`,
+				activeFeedCount: sql<number>`count(${sourceFeeds.id}) FILTER (WHERE ${sourceFeeds.status} = 'active')::int`,
+				lastFetchedAt: sql<Date | string | null>`max(${sourceFeeds.lastFetchedAt})`,
+				lastError: lastErrorExpr
+			})
+			.from(sources)
+			.leftJoin(sourceFeeds, eq(sourceFeeds.sourceId, sources.id))
+			.where(where)
+			.groupBy(sources.id, sources.slug, sources.name, sources.domain, sources.status, sources.statusNote)
+			.orderBy(asc(sources.name))
+			.limit(PAGE_SIZE)
+			.offset(offset),
+		db
+			.select({ count: sql<number>`count(*)::int` })
+			.from(sources)
+			.where(where),
 		db
 			.selectDistinct({ status: sources.status })
 			.from(sources)
-			.orderBy(sources.status)
+			.orderBy(asc(sources.status))
 	]);
 	const total = Number(totalRows.at(0)?.count ?? 0);
 
@@ -84,11 +69,11 @@ export const load: PageServerLoad = async (event) => {
 			name: row.name,
 			domain: row.domain,
 			status: row.status,
-			statusNote: row.status_note,
-			totalFeedCount: Number(row.total_feed_count),
-			activeFeedCount: Number(row.active_feed_count),
-			lastFetchedAt: row.last_fetched_at ? toIsoString(row.last_fetched_at) : null,
-			lastError: row.last_error
+			statusNote: row.statusNote,
+			totalFeedCount: Number(row.totalFeedCount),
+			activeFeedCount: Number(row.activeFeedCount),
+			lastFetchedAt: row.lastFetchedAt ? toIsoString(row.lastFetchedAt) : null,
+			lastError: row.lastError
 		})),
 		pagination: {
 			page,
@@ -202,17 +187,19 @@ function buildWhere(filters: SourceFilters) {
 
 	if (filters.q) {
 		const like = `%${filters.q}%`;
-		clauses.push(sql`(
-			s.name ILIKE ${like}
-			OR s.domain ILIKE ${like}
-			OR s.slug ILIKE ${like}
-			OR s.status_note ILIKE ${like}
-		)`);
+		clauses.push(
+			or(
+				ilike(sources.name, like),
+				ilike(sources.domain, like),
+				ilike(sources.slug, like),
+				ilike(sources.statusNote, like)
+			)!
+		);
 	}
 
-	if (filters.status) clauses.push(sql`s.status = ${filters.status}`);
+	if (filters.status) clauses.push(eq(sources.status, filters.status));
 
-	return clauses.length > 0 ? sql.join(clauses, sql` AND `) : null;
+	return clauses.length > 0 ? and(...clauses) : undefined;
 }
 
 function sourceActionError(validation: ValidationFailure) {

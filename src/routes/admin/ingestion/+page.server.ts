@@ -1,7 +1,8 @@
-import { sql } from 'drizzle-orm';
+import { asc, sql } from 'drizzle-orm';
 import type { Actions, PageServerLoad } from './$types';
 import { requireAdmin } from '$lib/server/admin/auth';
 import { db } from '$lib/server/db';
+import { sourceFeeds } from '$lib/server/db/schema';
 import {
 	enqueueActiveFeedJobs,
 	enqueueIngestionJob,
@@ -15,12 +16,14 @@ export const load: PageServerLoad = async (event) => {
 	requireAdmin(event);
 
 	const [feedStats, queueOverview] = await Promise.all([
-		db.execute<{ status: string; count: string | number }>(sql`
-			SELECT status, count(*) AS count
-			FROM source_feeds
-			GROUP BY status
-			ORDER BY status ASC
-		`),
+		db
+			.select({
+				status: sourceFeeds.status,
+				count: sql<number>`count(*)::int`
+			})
+			.from(sourceFeeds)
+			.groupBy(sourceFeeds.status)
+			.orderBy(asc(sourceFeeds.status)),
 		getIngestionQueueOverview()
 	]);
 

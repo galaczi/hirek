@@ -64,47 +64,50 @@ export const load: PageServerLoad = async (event) => {
 	const reportDays = parseReportDays(event.url);
 	const reportSince = getReportSince(reportDays);
 	const reportSinceIso = reportSince.toISOString();
+	const topCategoryClickCountExpr = sql<number>`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isBot} = false)::int`;
+	const topCategoryUniqueClickCountExpr = sql<number>`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isBot} = false AND ${clickEvents.isUnique} = true)::int`;
+	const trafficLabelExpr = getTrafficSourceCase();
 
 	if (access.isAdmin && !scopedSourceId) {
 		const [availableSourceRows, categoryRows] = await Promise.all([
-				db.execute<AvailableSourceRow>(sql`
-					SELECT
-						s.id,
-						s.slug,
-						s.name,
-						s.domain,
-						s.approval_status,
-						s.partner_package,
-						s.status,
-					(
-						SELECT count(*)::int
-						FROM articles a
-						WHERE a.source_id = s.id
-							AND a.active = true
-					) AS article_count,
-					(
-						SELECT count(*)::int
-						FROM click_events ce
-						WHERE ce.source_id = s.id
-							AND ce.is_bot = false
-							AND ce.created_at >= ${reportSinceIso}::timestamptz
-					) AS click_count,
-					(
-						SELECT count(*)::int
-						FROM click_events ce
-						WHERE ce.source_id = s.id
-							AND ce.is_bot = false
-							AND ce.is_unique = true
-							AND ce.created_at >= ${reportSinceIso}::timestamptz
-					) AS unique_click_count,
-					(
-						SELECT max(sf.last_fetched_at)
-						FROM source_feeds sf
-						WHERE sf.source_id = s.id
-					) AS last_fetched_at
-				FROM sources s
-				ORDER BY s.name ASC
-			`),
+				db
+					.select({
+						id: sources.id,
+						slug: sources.slug,
+						name: sources.name,
+						domain: sources.domain,
+						approvalStatus: sources.approvalStatus,
+						partnerPackage: sources.partnerPackage,
+						status: sources.status,
+						articleCount: sql<number>`(
+							SELECT count(*)::int
+							FROM ${articles}
+							WHERE ${articles.sourceId} = ${sources.id}
+								AND ${articles.active} = true
+						)`,
+						clickCount: sql<number>`(
+							SELECT count(*)::int
+							FROM ${clickEvents}
+							WHERE ${clickEvents.sourceId} = ${sources.id}
+								AND ${clickEvents.isBot} = false
+								AND ${clickEvents.createdAt} >= ${reportSince}
+						)`,
+						uniqueClickCount: sql<number>`(
+							SELECT count(*)::int
+							FROM ${clickEvents}
+							WHERE ${clickEvents.sourceId} = ${sources.id}
+								AND ${clickEvents.isBot} = false
+								AND ${clickEvents.isUnique} = true
+								AND ${clickEvents.createdAt} >= ${reportSince}
+						)`,
+						lastFetchedAt: sql<Date | string | null>`(
+							SELECT max(${sourceFeeds.lastFetchedAt})
+							FROM ${sourceFeeds}
+							WHERE ${sourceFeeds.sourceId} = ${sources.id}
+						)`
+					})
+					.from(sources)
+					.orderBy(sources.name),
 			db.select({ slug: categories.slug, name: categories.name }).from(categories).orderBy(categories.name)
 		]);
 
@@ -121,14 +124,14 @@ export const load: PageServerLoad = async (event) => {
 				id: row.id,
 				slug: row.slug,
 				name: row.name,
-					domain: row.domain,
-					approvalStatus: row.approval_status,
-					partnerPackage: row.partner_package,
-					status: row.status,
-					articleCount: Number(row.article_count),
-					clickCount: Number(row.click_count),
-				uniqueClickCount: Number(row.unique_click_count),
-				lastFetchedAt: row.last_fetched_at ? toIsoString(row.last_fetched_at) : null
+				domain: row.domain,
+				approvalStatus: row.approvalStatus,
+				partnerPackage: row.partnerPackage,
+				status: row.status,
+				articleCount: Number(row.articleCount),
+				clickCount: Number(row.clickCount),
+				uniqueClickCount: Number(row.uniqueClickCount),
+				lastFetchedAt: row.lastFetchedAt ? toIsoString(row.lastFetchedAt) : null
 			})),
 			sourceState: null,
 			sourceRules: [],
@@ -336,30 +339,33 @@ export const load: PageServerLoad = async (event) => {
 					.limit(1)
 			: Promise.resolve([]),
 		getClicksOverTime(scopedSourceId, reportDays),
-		db.execute<TopCategoryRow>(sql`
-			SELECT
-				coalesce(c.slug, 'nincs-rovat') AS slug,
-				coalesce(c.name, 'Nincs rovat') AS name,
-				count(ce.id) FILTER (WHERE ce.is_bot = false) AS click_count,
-				count(ce.id) FILTER (WHERE ce.is_bot = false AND ce.is_unique = true) AS unique_click_count
-			FROM click_events ce
-			LEFT JOIN categories c ON c.id = ce.category_id
-			WHERE ${sql.join(clickWhere, sql` AND `)}
-			GROUP BY c.id, c.slug, c.name
-			ORDER BY click_count DESC, unique_click_count DESC
-			LIMIT 8
-		`),
-		db.execute<TrafficSourceRow>(sql`
-			SELECT
-				${getTrafficSourceCase()} AS label,
-				count(ce.id) FILTER (WHERE ce.is_bot = false) AS click_count,
-				count(ce.id) FILTER (WHERE ce.is_bot = false AND ce.is_unique = true) AS unique_click_count
-			FROM click_events ce
-			WHERE ${sql.join(clickWhere, sql` AND `)}
-			GROUP BY label
-			ORDER BY click_count DESC, unique_click_count DESC
-			LIMIT 8
-		`)
+		db
+			.select({
+				slug: sql<string>`coalesce(${categories.slug}, 'nincs-rovat')`,
+				name: sql<string>`coalesce(${categories.name}, 'Nincs rovat')`,
+				clickCount: topCategoryClickCountExpr,
+				uniqueClickCount: topCategoryUniqueClickCountExpr
+			})
+			.from(clickEvents)
+			.leftJoin(categories, eq(categories.id, clickEvents.categoryId))
+			.where(and(...clickWhere))
+			.groupBy(categories.id, categories.slug, categories.name)
+			.orderBy(desc(topCategoryClickCountExpr), desc(topCategoryUniqueClickCountExpr))
+			.limit(8),
+		db
+			.select({
+				label: trafficLabelExpr,
+				clickCount: sql<number>`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isBot} = false)::int`,
+				uniqueClickCount: sql<number>`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isBot} = false AND ${clickEvents.isUnique} = true)::int`
+			})
+			.from(clickEvents)
+			.where(and(...clickWhere))
+			.groupBy(trafficLabelExpr)
+			.orderBy(
+				desc(sql`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isBot} = false)`),
+				desc(sql`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isBot} = false AND ${clickEvents.isUnique} = true)`)
+			)
+			.limit(8)
 		]);
 
 	return {
@@ -423,19 +429,19 @@ export const load: PageServerLoad = async (event) => {
 		clicksOverTime: clicksOverTimeRows.map((row) => ({
 			day: row.day,
 			label: formatDayLabel(row.day),
-			clickCount: Number(row.click_count),
-			uniqueClickCount: Number(row.unique_click_count)
+			clickCount: Number(row.clickCount),
+			uniqueClickCount: Number(row.uniqueClickCount)
 		})),
 		topCategories: topCategoryRows.map((row) => ({
 			slug: row.slug,
 			name: row.name,
-			clickCount: Number(row.click_count),
-			uniqueClickCount: Number(row.unique_click_count)
+			clickCount: Number(row.clickCount),
+			uniqueClickCount: Number(row.uniqueClickCount)
 		})),
 		trafficSources: trafficSourceRows.map((row) => ({
 			label: row.label,
-			clickCount: Number(row.click_count),
-			uniqueClickCount: Number(row.unique_click_count)
+			clickCount: Number(row.clickCount),
+			uniqueClickCount: Number(row.uniqueClickCount)
 		}))
 	};
 };
@@ -605,14 +611,14 @@ function getReportSince(days: number) {
 }
 
 function buildClickWhere(sourceId: number | null, reportSinceIso: string) {
-	const clauses: SQL[] = [sql`ce.created_at >= ${reportSinceIso}::timestamptz`];
-	if (sourceId) clauses.push(sql`ce.source_id = ${sourceId}`);
+	const clauses: SQL[] = [sql`${clickEvents.createdAt} >= ${reportSinceIso}::timestamptz`];
+	if (sourceId) clauses.push(eq(clickEvents.sourceId, sourceId));
 	return clauses;
 }
 
 function getClicksOverTime(sourceId: number | null, days: number) {
 	const firstDay = getReportSince(days).toISOString();
-	return db.execute<ClicksOverTimeRow>(sql`
+	return db.execute<{ day: string; clickCount: string | number; uniqueClickCount: string | number }>(sql`
 		WITH days AS (
 			SELECT generate_series(
 				${firstDay}::timestamptz,
@@ -622,8 +628,8 @@ function getClicksOverTime(sourceId: number | null, days: number) {
 		)
 		SELECT
 			days.day::text AS day,
-			count(ce.id) FILTER (WHERE ce.is_bot = false) AS click_count,
-			count(ce.id) FILTER (WHERE ce.is_bot = false AND ce.is_unique = true) AS unique_click_count
+			count(ce.id) FILTER (WHERE ce.is_bot = false) AS "clickCount",
+			count(ce.id) FILTER (WHERE ce.is_bot = false AND ce.is_unique = true) AS "uniqueClickCount"
 		FROM days
 		LEFT JOIN click_events ce ON ce.created_at >= days.day
 			AND ce.created_at < days.day + interval '1 day'

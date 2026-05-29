@@ -1,4 +1,4 @@
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { error } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { sourceFeeds, sources } from '$lib/server/db/schema';
@@ -17,32 +17,26 @@ export function getApprovedSourceStatus(currentStatus: string, activeFeedCount: 
 }
 
 export async function getSourceApprovalContext(sourceId: number) {
-	const rows = await db.execute<{
-		id: number;
-		approval_status: string;
-		status: string;
-		active_feed_count: string | number;
-	}>(sql`
-		SELECT
-			s.id,
-			s.approval_status,
-			s.status,
-			count(sf.id) FILTER (WHERE sf.status = 'active') AS active_feed_count
-		FROM sources s
-		LEFT JOIN source_feeds sf ON sf.source_id = s.id
-		WHERE s.id = ${sourceId}
-		GROUP BY s.id
-		LIMIT 1
-	`);
+	const [row] = await db
+		.select({
+			id: sources.id,
+			approvalStatus: sources.approvalStatus,
+			status: sources.status,
+			activeFeedCount: sql<number>`count(${sourceFeeds.id}) FILTER (WHERE ${sourceFeeds.status} = 'active')::int`
+		})
+		.from(sources)
+		.leftJoin(sourceFeeds, eq(sourceFeeds.sourceId, sources.id))
+		.where(eq(sources.id, sourceId))
+		.groupBy(sources.id, sources.approvalStatus, sources.status)
+		.limit(1);
 
-	const row = rows[0];
 	if (!row) error(404, 'Forrás nem található');
 
 	return {
 		id: row.id,
-		approvalStatus: row.approval_status,
+		approvalStatus: row.approvalStatus,
 		status: row.status,
-		activeFeedCount: Number(row.active_feed_count)
+		activeFeedCount: Number(row.activeFeedCount)
 	};
 }
 
