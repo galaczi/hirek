@@ -1,4 +1,4 @@
-import { and, count, desc, eq, sql, type SQL } from 'drizzle-orm';
+import { and, count, desc, eq, gte, sql, type SQL } from 'drizzle-orm';
 import type { Actions, PageServerLoad } from './$types';
 import { requirePartnerAccess } from '$lib/server/admin/auth';
 import { db } from '$lib/server/db';
@@ -35,14 +35,104 @@ type TrafficSourceRow = {
 	unique_click_count: string | number;
 };
 
+type AvailableSourceRow = {
+	id: number;
+	slug: string;
+	name: string;
+	domain: string;
+	status: string;
+	article_count: string | number;
+	click_count: string | number;
+	unique_click_count: string | number;
+	last_fetched_at: string | Date | null;
+};
+
+const REPORT_RANGES = [7, 30, 90];
+
 export const load: PageServerLoad = async (event) => {
 	const access = requirePartnerAccess(event);
 	const scopedSourceId = access.sourceId;
+	const reportDays = parseReportDays(event.url);
+	const reportSince = getReportSince(reportDays);
+	const reportSinceIso = reportSince.toISOString();
+
+	if (access.isAdmin && !scopedSourceId) {
+		const [availableSourceRows, categoryRows] = await Promise.all([
+			db.execute<AvailableSourceRow>(sql`
+				SELECT
+					s.id,
+					s.slug,
+					s.name,
+					s.domain,
+					s.status,
+					(
+						SELECT count(*)::int
+						FROM articles a
+						WHERE a.source_id = s.id
+							AND a.active = true
+					) AS article_count,
+					(
+						SELECT count(*)::int
+						FROM click_events ce
+						WHERE ce.source_id = s.id
+							AND ce.is_bot = false
+							AND ce.created_at >= ${reportSinceIso}::timestamptz
+					) AS click_count,
+					(
+						SELECT count(*)::int
+						FROM click_events ce
+						WHERE ce.source_id = s.id
+							AND ce.is_bot = false
+							AND ce.is_unique = true
+							AND ce.created_at >= ${reportSinceIso}::timestamptz
+					) AS unique_click_count,
+					(
+						SELECT max(sf.last_fetched_at)
+						FROM source_feeds sf
+						WHERE sf.source_id = s.id
+					) AS last_fetched_at
+				FROM sources s
+				ORDER BY s.name ASC
+			`),
+			db.select({ slug: categories.slug, name: categories.name }).from(categories).orderBy(categories.name)
+		]);
+
+		return {
+			sourceStats: [],
+			topArticles: [],
+			recentClicks: [],
+			categories: categoryRows,
+			partnerSourceId: null,
+			isAdmin: true,
+			reportDays,
+			reportRanges: REPORT_RANGES,
+			availableSources: availableSourceRows.map((row) => ({
+				id: row.id,
+				slug: row.slug,
+				name: row.name,
+				domain: row.domain,
+				status: row.status,
+				articleCount: Number(row.article_count),
+				clickCount: Number(row.click_count),
+				uniqueClickCount: Number(row.unique_click_count),
+				lastFetchedAt: row.last_fetched_at ? toIsoString(row.last_fetched_at) : null
+			})),
+			sourceRules: [],
+			feedHealth: [],
+			sourceSettings: null,
+			clicksOverTime: [],
+			topCategories: [],
+			trafficSources: []
+		};
+	}
+
 	const sourceFilter = scopedSourceId ? eq(sources.id, scopedSourceId) : undefined;
 	const articleFilter = scopedSourceId ? eq(articles.sourceId, scopedSourceId) : undefined;
-	const clickFilter = scopedSourceId ? eq(clickEvents.sourceId, scopedSourceId) : undefined;
+	const clickFilter = scopedSourceId
+		? and(eq(clickEvents.sourceId, scopedSourceId), gte(clickEvents.createdAt, reportSince))
+		: gte(clickEvents.createdAt, reportSince);
 
-	const clickWhere = buildClickWhere(scopedSourceId);
+	const clickWhere = buildClickWhere(scopedSourceId, reportSinceIso);
 	const [sourceStats, topArticles, recentClicks, categoryRows, ruleRows, feedRows, sourceSettingsRows, clicksOverTimeRows, topCategoryRows, trafficSourceRows] =
 		await Promise.all([
 		db
@@ -61,11 +151,13 @@ export const load: PageServerLoad = async (event) => {
 					FROM ${clickEvents}
 					WHERE ${clickEvents.sourceId} = ${sources.id}
 						AND ${clickEvents.isBot} = false
+						AND ${clickEvents.createdAt} >= ${reportSince}
 				)`,
 				rawClickCount: sql<number>`(
 					SELECT count(*)::int
 					FROM ${clickEvents}
 					WHERE ${clickEvents.sourceId} = ${sources.id}
+						AND ${clickEvents.createdAt} >= ${reportSince}
 				)`,
 				uniqueClickCount: sql<number>`(
 					SELECT count(*)::int
@@ -73,12 +165,14 @@ export const load: PageServerLoad = async (event) => {
 					WHERE ${clickEvents.sourceId} = ${sources.id}
 						AND ${clickEvents.isBot} = false
 						AND ${clickEvents.isUnique} = true
+						AND ${clickEvents.createdAt} >= ${reportSince}
 				)`,
 				botClickCount: sql<number>`(
 					SELECT count(*)::int
 					FROM ${clickEvents}
 					WHERE ${clickEvents.sourceId} = ${sources.id}
 						AND ${clickEvents.isBot} = true
+						AND ${clickEvents.createdAt} >= ${reportSince}
 				)`
 			})
 			.from(sources)
@@ -93,11 +187,12 @@ export const load: PageServerLoad = async (event) => {
 				publishedAt: articles.publishedAt,
 				clickCount: sql<number>`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isBot} = false)`,
 				rawClickCount: count(clickEvents.id),
-				uniqueClickCount: sql<number>`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isBot} = false AND ${clickEvents.isUnique} = true)`
+				uniqueClickCount: sql<number>`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isBot} = false AND ${clickEvents.isUnique} = true)`,
+				botClickCount: sql<number>`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isBot} = true)`
 			})
 			.from(articles)
 			.innerJoin(sources, eq(sources.id, articles.sourceId))
-			.leftJoin(clickEvents, eq(clickEvents.articleId, articles.id))
+			.leftJoin(clickEvents, and(eq(clickEvents.articleId, articles.id), gte(clickEvents.createdAt, reportSince)))
 			.where(articleFilter ? and(eq(articles.active, true), articleFilter) : eq(articles.active, true))
 			.groupBy(articles.id, sources.id)
 			.orderBy(
@@ -163,7 +258,7 @@ export const load: PageServerLoad = async (event) => {
 					.where(eq(sources.id, scopedSourceId))
 					.limit(1)
 			: Promise.resolve([]),
-		getClicksOverTime(scopedSourceId),
+		getClicksOverTime(scopedSourceId, reportDays),
 		db.execute<TopCategoryRow>(sql`
 			SELECT
 				coalesce(c.slug, 'nincs-rovat') AS slug,
@@ -209,6 +304,7 @@ export const load: PageServerLoad = async (event) => {
 			clickCount: Number(row.clickCount),
 			rawClickCount: Number(row.rawClickCount),
 			uniqueClickCount: Number(row.uniqueClickCount),
+			botClickCount: Number(row.botClickCount),
 			publishedAt: toIsoString(row.publishedAt)
 		})),
 		recentClicks: recentClicks.map((row) => ({
@@ -225,6 +321,9 @@ export const load: PageServerLoad = async (event) => {
 		categories: categoryRows,
 		partnerSourceId: scopedSourceId,
 		isAdmin: access.isAdmin,
+		reportDays,
+		reportRanges: REPORT_RANGES,
+		availableSources: [],
 		sourceRules: ruleRows,
 		feedHealth: feedRows.map((row) => ({
 			feedId: row.feedId,
@@ -377,19 +476,30 @@ function toIsoString(value: Date | string) {
 	return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
-function buildClickWhere(sourceId: number | null) {
-	const clauses: SQL[] = [
-		sql`ce.created_at >= now() - interval '30 days'`
-	];
+function parseReportDays(url: URL) {
+	const requested = Number(url.searchParams.get('range') ?? '30');
+	return REPORT_RANGES.includes(requested) ? requested : 30;
+}
+
+function getReportSince(days: number) {
+	const since = new Date();
+	since.setHours(0, 0, 0, 0);
+	since.setDate(since.getDate() - (days - 1));
+	return since;
+}
+
+function buildClickWhere(sourceId: number | null, reportSinceIso: string) {
+	const clauses: SQL[] = [sql`ce.created_at >= ${reportSinceIso}::timestamptz`];
 	if (sourceId) clauses.push(sql`ce.source_id = ${sourceId}`);
 	return clauses;
 }
 
-function getClicksOverTime(sourceId: number | null) {
+function getClicksOverTime(sourceId: number | null, days: number) {
+	const firstDay = getReportSince(days).toISOString();
 	return db.execute<ClicksOverTimeRow>(sql`
 		WITH days AS (
 			SELECT generate_series(
-				date_trunc('day', now()) - interval '13 days',
+				${firstDay}::timestamptz,
 				date_trunc('day', now()),
 				interval '1 day'
 			)::date AS day

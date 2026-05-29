@@ -1,14 +1,11 @@
 <script lang="ts">
+	import { page } from '$app/state';
 	import type { PageProps } from './$types';
 
 	let { data }: PageProps = $props();
 
-	const scopedPartnerQuery = $derived(
-		data.isAdmin && data.partnerSourceId ? `sourceId=${data.partnerSourceId}` : ''
-	);
-	const csvExportHref = $derived(
-		scopedPartnerQuery ? `/partner/clicks.csv?${scopedPartnerQuery}` : '/partner/clicks.csv'
-	);
+	const isAdminSourcePicker = $derived(data.isAdmin && !data.partnerSourceId);
+	const csvExportHref = $derived(buildPartnerHref('/partner/clicks.csv', data.reportDays));
 	const clicksOverTimeMax = $derived(
 		Math.max(1, ...data.clicksOverTime.map((item) => item.clickCount))
 	);
@@ -19,8 +16,24 @@
 		Math.max(1, ...data.trafficSources.map((item) => item.clickCount))
 	);
 
+	function buildPartnerHref(pathname: string, range: number, sourceId = data.partnerSourceId) {
+		const params = new URLSearchParams(page.url.searchParams);
+		params.set('range', String(range));
+		if (data.isAdmin && sourceId) params.set('sourceId', String(sourceId));
+		if (!data.isAdmin) params.delete('sourceId');
+		return `${pathname}?${params.toString()}`;
+	}
+
+	function sourcePickerHref(sourceId: number) {
+		return buildPartnerHref('/partner/', data.reportDays, sourceId);
+	}
+
 	function actionUrl(action: string) {
-		return scopedPartnerQuery ? `?/${action}&${scopedPartnerQuery}` : `?/${action}`;
+		const params = new URLSearchParams();
+		params.set('range', String(data.reportDays));
+		if (data.isAdmin && data.partnerSourceId) params.set('sourceId', String(data.partnerSourceId));
+		const query = params.toString();
+		return query ? `?/${action}&${query}` : `?/${action}`;
 	}
 
 	function formatDate(value: string) {
@@ -52,14 +65,66 @@
 	<title>Partner portál - hirek.hu</title>
 </svelte:head>
 
-<section class="panel">
-	<div class="admin-actions">
-		<a class="load-more-btn" href={csvExportHref}>CSV export</a>
+<section class="panel partner-report-toolbar">
+	<div>
+		<p class="section-kicker">Riport</p>
+		<h2 class="panel-title">Partner analitika</h2>
+	</div>
+	<div class="partner-report-actions">
+		<div class="range-tabs" aria-label="Riport időszak">
+			{#each data.reportRanges as range (range)}
+				<a
+					href={buildPartnerHref('/partner/', range)}
+					class:active={data.reportDays === range}
+					aria-current={data.reportDays === range ? 'page' : undefined}
+				>
+					{range} nap
+				</a>
+			{/each}
+		</div>
+		{#if !isAdminSourcePicker}
+			<a class="load-more-btn" href={csvExportHref}>CSV export</a>
+		{/if}
 	</div>
 </section>
 
+{#if isAdminSourcePicker}
+	<section class="panel">
+		<div class="panel-heading-row">
+			<div>
+				<p class="section-kicker">Admin nézet</p>
+				<h2 class="panel-title">Partnerforrás kiválasztása</h2>
+				<p class="panel-subtitle">
+					A partner portál egyetlen forrás adatait mutatja. Válassz forrást a riportokhoz és
+					a kategóriaszabályokhoz.
+				</p>
+			</div>
+			<span>{data.availableSources.length} forrás</span>
+		</div>
+		<div class="partner-source-grid">
+			{#each data.availableSources as source (source.id)}
+				<a href={sourcePickerHref(source.id)}>
+					<div>
+						<strong>{source.name}</strong>
+						<span>{source.domain}</span>
+					</div>
+					<div class="partner-source-metrics">
+						<span>{source.clickCount} kattintás</span>
+						<span>{source.articleCount} cikk</span>
+					</div>
+					<small>{source.status}</small>
+				</a>
+			{:else}
+				<div class="empty-state compact-empty">
+					<strong>Nincs forrás.</strong>
+					<span>Először az admin forráskezelőben hozz létre partnerforrást.</span>
+				</div>
+			{/each}
+		</div>
+	</section>
+{:else}
 <section class="panel">
-	<h2 class="panel-title">Források</h2>
+	<h2 class="panel-title">Forrás</h2>
 	<div class="admin-table">
 		<div class="admin-row admin-row-head">
 			<span>Forrás</span><span>Domain</span><span>Cikkek</span><span>Emberi kattintás</span><span>Egyedi</span><span>Bot/nyers</span>
@@ -82,7 +147,7 @@
 		<div class="panel-heading-row">
 			<div>
 				<p class="section-kicker">Kattintások</p>
-				<h2 class="panel-title">Elmúlt 14 nap</h2>
+				<h2 class="panel-title">Elmúlt {data.reportDays} nap</h2>
 			</div>
 		</div>
 		<div class="partner-bar-list">
@@ -228,7 +293,7 @@
 
 <section class="admin-grid">
 	<div class="panel">
-		<h2 class="panel-title">Top cikkek</h2>
+		<h2 class="panel-title">Cikkenkénti analitika</h2>
 		<div class="top-news-list">
 			{#each data.topArticles as article (article.id)}
 				<div class="top-news-item">
@@ -238,6 +303,7 @@
 							<span>{article.sourceName}</span>
 							<span>{article.clickCount} emberi kattintás</span>
 							<span>{article.uniqueClickCount} egyedi</span>
+							<span>{article.botClickCount}/{article.rawClickCount} bot/nyers</span>
 							<span>{formatDate(article.publishedAt)}</span>
 						</div>
 						<form class="inline-form" method="POST" action={actionUrl('overrideCategory')}>
@@ -275,3 +341,4 @@
 		</div>
 	</div>
 </section>
+{/if}

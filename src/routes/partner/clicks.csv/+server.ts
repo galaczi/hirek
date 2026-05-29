@@ -1,12 +1,22 @@
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq, gte } from 'drizzle-orm';
+import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requirePartnerAccess } from '$lib/server/admin/auth';
 import { db } from '$lib/server/db';
 import { articles, categories, clickEvents, sources } from '$lib/server/db/schema';
 
+const REPORT_RANGES = [7, 30, 90];
+
 export const GET: RequestHandler = async (event) => {
 	const access = requirePartnerAccess(event);
-	const where = access.sourceId ? eq(clickEvents.sourceId, access.sourceId) : undefined;
+	const reportDays = parseReportDays(event.url);
+	const reportSince = getReportSince(reportDays);
+
+	if (!access.sourceId) {
+		error(400, 'Admin exporthoz válassz partnerforrást.');
+	}
+
+	const where = and(eq(clickEvents.sourceId, access.sourceId), gte(clickEvents.createdAt, reportSince));
 
 	const rows = await db
 		.select({
@@ -71,6 +81,18 @@ export const GET: RequestHandler = async (event) => {
 
 function csvCell(value: string) {
 	return `"${value.replaceAll('"', '""')}"`;
+}
+
+function parseReportDays(url: URL) {
+	const requested = Number(url.searchParams.get('range') ?? '30');
+	return REPORT_RANGES.includes(requested) ? requested : 30;
+}
+
+function getReportSince(days: number) {
+	const since = new Date();
+	since.setHours(0, 0, 0, 0);
+	since.setDate(since.getDate() - (days - 1));
+	return since;
 }
 
 function toIsoString(value: Date | string) {

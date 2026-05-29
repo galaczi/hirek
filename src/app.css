@@ -957,6 +957,102 @@ mark {
   margin-bottom: 24px;
 }
 
+.partner-report-toolbar {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.partner-report-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.range-tabs {
+  align-items: center;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+}
+
+.range-tabs a {
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 850;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+
+.range-tabs a:hover,
+.range-tabs a.active {
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
+  color: var(--text-main);
+}
+
+.partner-source-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.partner-source-grid a {
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 76px;
+  padding: 12px;
+}
+
+.partner-source-grid a:hover {
+  background: var(--bg-alt);
+  border-color: var(--border-focus);
+}
+
+.partner-source-grid strong,
+.partner-source-grid span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.partner-source-grid strong {
+  color: var(--text-main);
+  font-size: 13px;
+}
+
+.partner-source-grid span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.partner-source-grid small {
+  grid-column: 1 / -1;
+  color: var(--text-light);
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.partner-source-metrics {
+  text-align: right;
+}
+
 .partner-bar-list {
   display: grid;
   gap: 11px;
@@ -1514,6 +1610,22 @@ mark {
 
   .partner-analytics-grid {
     grid-template-columns: 1fr;
+  }
+
+  .partner-report-toolbar,
+  .partner-report-actions {
+    align-items: stretch;
+    display: grid;
+    justify-content: stretch;
+  }
+
+  .range-tabs {
+    justify-content: stretch;
+  }
+
+  .range-tabs a {
+    text-align: center;
+    width: 100%;
   }
 
   .moderation-head {

@@ -21,11 +21,12 @@ export function requirePartnerAccess(event: RequestEvent) {
 	const user = requireSignedIn(event);
 
 	if (user.role === 'admin') {
-		const sourceId = Number(event.url.searchParams.get('sourceId'));
+		const sourceIdParam = event.url.searchParams.get('sourceId');
+		const sourceId = sourceIdParam ? Number(sourceIdParam) : null;
 		return {
 			user,
 			isAdmin: true,
-			sourceId: Number.isInteger(sourceId) ? sourceId : null
+			sourceId: sourceId && Number.isInteger(sourceId) ? sourceId : null
 		};
 	}
 
