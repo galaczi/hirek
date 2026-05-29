@@ -62,5 +62,6 @@ export const timeFilters = [
 	{ value: 'all', label: 'Összes' },
 	{ value: '4h', label: '4 óra' },
 	{ value: '12h', label: '12 óra' },
-	{ value: '24h', label: '24 óra' }
+	{ value: '24h', label: '24 óra' },
+	{ value: '7d', label: '7 nap' }
 ];

@@ -44,10 +44,16 @@ export async function ingestFeedById(feedId: number) {
 		.from(sourceFeeds)
 		.innerJoin(sources, eq(sources.id, sourceFeeds.sourceId))
 		.leftJoin(categories, eq(categories.id, sourceFeeds.categoryId))
-		.where(and(eq(sourceFeeds.id, feedId), eq(sourceFeeds.status, 'active')))
+		.where(
+			and(
+				eq(sourceFeeds.id, feedId),
+				eq(sourceFeeds.status, 'active'),
+				eq(sources.approvalStatus, 'approved')
+			)
+		)
 		.limit(1);
 
-	if (!feed) throw new Error(`Active feed ${feedId} not found`);
+	if (!feed) throw new Error(`Active approved feed ${feedId} not found`);
 
 	const response = await fetch(feed.feedUrl, {
 		headers: { 'user-agent': 'hirek.hu ingestion bot (+https://hirek.hu)' }

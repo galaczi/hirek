@@ -5,6 +5,16 @@
 	let { data }: PageProps = $props();
 
 	const isAdminSourcePicker = $derived(data.isAdmin && !data.partnerSourceId);
+	const approvalStatusLabels: Record<string, string> = {
+		pending: 'Jóváhagyásra vár',
+		approved: 'Jóváhagyott',
+		rejected: 'Elutasított'
+	};
+	const partnerPackageLabels: Record<string, string> = {
+		free: 'Ingyenes',
+		partner: 'Partner',
+		growth: 'Növekedési'
+	};
 	const csvExportHref = $derived(buildPartnerHref('/partner/clicks.csv', data.reportDays));
 	const clicksOverTimeMax = $derived(
 		Math.max(1, ...data.clicksOverTime.map((item) => item.clickCount))
@@ -108,13 +118,16 @@
 						<strong>{source.name}</strong>
 						<span>{source.domain}</span>
 					</div>
-					<div class="partner-source-metrics">
-						<span>{source.clickCount} kattintás</span>
-						<span>{source.articleCount} cikk</span>
-					</div>
-					<small>{source.status}</small>
-				</a>
-			{:else}
+						<div class="partner-source-metrics">
+							<span>{source.clickCount} kattintás</span>
+							<span>{source.articleCount} cikk</span>
+						</div>
+						<small>
+							{approvalStatusLabels[source.approvalStatus] ?? source.approvalStatus} ·
+							{partnerPackageLabels[source.partnerPackage] ?? source.partnerPackage}
+						</small>
+					</a>
+				{:else}
 				<div class="empty-state compact-empty">
 					<strong>Nincs forrás.</strong>
 					<span>Először az admin forráskezelőben hozz létre partnerforrást.</span>
@@ -122,6 +135,29 @@
 			{/each}
 		</div>
 	</section>
+{:else if data.sourceState && !data.sourceState.isApproved}
+<section class="panel">
+	<div class="panel-heading-row">
+		<div>
+			<p class="section-kicker">Forrás állapot</p>
+			<h2 class="panel-title">{data.sourceState.sourceName}</h2>
+			<p class="panel-subtitle">{data.sourceState.sourceDomain}</p>
+		</div>
+		<div class="top-meta">
+			<span>{approvalStatusLabels[data.sourceState.approvalStatus] ?? data.sourceState.approvalStatus}</span>
+			<span>{partnerPackageLabels[data.sourceState.partnerPackage] ?? data.sourceState.partnerPackage}</span>
+		</div>
+	</div>
+	<div class="metric-list">
+		<div class="metric-row"><span>Jóváhagyás</span><strong>{approvalStatusLabels[data.sourceState.approvalStatus] ?? data.sourceState.approvalStatus}</strong></div>
+		<div class="metric-row"><span>Csomag</span><strong>{partnerPackageLabels[data.sourceState.partnerPackage] ?? data.sourceState.partnerPackage}</strong></div>
+		<div class="metric-row"><span>Működési státusz</span><strong>{data.sourceState.status}</strong></div>
+	</div>
+	<p class="form-hint">
+		{data.sourceState.statusNote ??
+			'A forrás még nem jóváhagyott, ezért az analitika és a konfiguráció később válik elérhetővé.'}
+	</p>
+</section>
 {:else}
 <section class="panel">
 	<h2 class="panel-title">Forrás</h2>
@@ -140,6 +176,13 @@
 			</div>
 		{/each}
 	</div>
+	{#if data.sourceState}
+		<p class="form-hint">
+			{approvalStatusLabels[data.sourceState.approvalStatus] ?? data.sourceState.approvalStatus}
+			·
+			{partnerPackageLabels[data.sourceState.partnerPackage] ?? data.sourceState.partnerPackage}
+		</p>
+	{/if}
 </section>
 
 <section class="partner-analytics-grid">

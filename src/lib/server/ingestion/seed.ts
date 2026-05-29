@@ -22,7 +22,10 @@ export async function seedSourceRegistry() {
 				SET
 					name = ${source.name},
 					domain = ${source.domain},
-					status = CASE WHEN status = 'pending' THEN 'needs_rss' ELSE status END,
+					status = CASE
+						WHEN approval_status = 'approved' AND status = 'pending' THEN 'needs_rss'
+						ELSE status
+					END,
 					updated_at = now()
 				WHERE id = ${slugRows[0].id}
 			`);
@@ -41,7 +44,10 @@ export async function seedSourceRegistry() {
 					slug = ${source.slug},
 					name = ${source.name},
 					domain = ${source.domain},
-					status = CASE WHEN status = 'pending' THEN 'needs_rss' ELSE status END,
+					status = CASE
+						WHEN approval_status = 'approved' AND status = 'pending' THEN 'needs_rss'
+						ELSE status
+					END,
 					updated_at = now()
 				WHERE id = ${domainRows[0].id}
 			`);
@@ -50,19 +56,22 @@ export async function seedSourceRegistry() {
 		}
 
 		await db.execute(sql`
-			INSERT INTO sources (slug, name, domain, status, updated_at)
-			VALUES (${source.slug}, ${source.name}, ${source.domain}, 'needs_rss', now())
+			INSERT INTO sources (slug, name, domain, approval_status, status, updated_at)
+			VALUES (${source.slug}, ${source.name}, ${source.domain}, 'approved', 'needs_rss', now())
 		`);
 	}
 
 	for (const feed of seedFeeds) {
 		const sourceRows = await db.execute<{ id: number }>(sql`
-			INSERT INTO sources (slug, name, domain, status, updated_at)
-			VALUES (${feed.source.slug}, ${feed.source.name}, ${feed.source.domain}, 'ingesting', now())
+			INSERT INTO sources (slug, name, domain, approval_status, status, updated_at)
+			VALUES (${feed.source.slug}, ${feed.source.name}, ${feed.source.domain}, 'approved', 'ingesting', now())
 			ON CONFLICT (slug) DO UPDATE SET
 				name = excluded.name,
 				domain = excluded.domain,
-				status = 'ingesting',
+				status = CASE
+					WHEN sources.approval_status = 'approved' THEN 'ingesting'
+					ELSE sources.status
+				END,
 				updated_at = now()
 			RETURNING id
 		`);

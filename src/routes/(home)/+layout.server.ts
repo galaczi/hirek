@@ -28,20 +28,21 @@ type SourceRow = Publisher;
 type HomeFilters = {
 	category?: string;
 	source?: string;
-	time?: Extract<SearchFilters['time'], '4h' | '12h' | '24h'>;
+	time?: Extract<SearchFilters['time'], '4h' | '12h' | '24h' | '7d'>;
 };
 
 const fallbackCategories: Category[] = [{ slug: 'all', name: 'Összes hír' }];
-const timeFilters = new Set(['4h', '12h', '24h']);
+const timeFilters = new Set(['4h', '12h', '24h', '7d']);
 const HOMEPAGE_LOAD_ERROR = 'A hírek betöltése most nem sikerült. Kérlek, próbáld újra pár pillanat múlva.';
 
 export const load: LayoutServerLoad = async ({ params, url }) => {
-	redirectLegacyHomeFilters(url);
+	const isSearchRoute = url.pathname.startsWith('/kereses');
+	redirectLegacyHomeFilters(url, isSearchRoute);
 
 	const q = url.searchParams.get('q')?.trim() ?? '';
-	const routeFilters = await getRouteFilters(params, url);
+	const routeFilters = isSearchRoute ? getSearchRouteFilters(url) : await getRouteFilters(params, url);
 	const filters = { ...parseQueryFilters(url), ...routeFilters };
-	const canonicalPath = buildHomePath(filters);
+	const canonicalPath = isSearchRoute ? '/kereses/' : buildHomePath(filters);
 	const todayLabel = new Intl.DateTimeFormat('hu-HU', {
 		year: 'numeric',
 		month: 'long',
@@ -129,7 +130,8 @@ async function getRouteFilters(params: Partial<Record<string, string>>, url: URL
 	return {};
 }
 
-function redirectLegacyHomeFilters(url: URL) {
+function redirectLegacyHomeFilters(url: URL, isSearchRoute: boolean) {
+	if (isSearchRoute) return;
 	const source = cleanFilter(url.searchParams.get('source'));
 	const category = cleanFilter(url.searchParams.get('category'));
 	if (!source && !category) return;
@@ -146,6 +148,13 @@ function buildHomePath(filters: Pick<HomeFilters, 'category' | 'source'>) {
 	if (filters.source) return `/${filters.source}/`;
 	if (filters.category) return `/rovat/${filters.category}/`;
 	return '/';
+}
+
+function getSearchRouteFilters(url: URL): HomeFilters {
+	return {
+		source: cleanFilter(url.searchParams.get('source')),
+		category: cleanFilter(url.searchParams.get('category'))
+	};
 }
 
 function parseQueryFilters(url: URL): HomeFilters {
@@ -210,7 +219,8 @@ function getTimeBoundary(time: HomeFilters['time']) {
 	const hours = {
 		'4h': 4,
 		'12h': 12,
-		'24h': 24
+		'24h': 24,
+		'7d': 24 * 7
 	}[time];
 
 	return new Date(Date.now() - hours * 60 * 60 * 1000);

@@ -106,10 +106,23 @@ export const actions: Actions = {
 
 		const [source] = await db
 			.insert(sources)
-			.values({ name, slug, domain, status: 'ingesting', updatedAt: new Date() })
+			.values({
+				name,
+				slug,
+				domain,
+				approvalStatus: 'approved',
+				status: 'ingesting',
+				updatedAt: new Date()
+			})
 			.onConflictDoUpdate({
 				target: sources.slug,
-				set: { name, domain, status: 'ingesting', updatedAt: new Date() }
+				set: {
+					name,
+					domain,
+					approvalStatus: 'approved',
+					status: 'ingesting',
+					updatedAt: new Date()
+				}
 			})
 			.returning({ id: sources.id });
 

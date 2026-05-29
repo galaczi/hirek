@@ -151,6 +151,12 @@
 			{#if activeTimeFilter !== 'all'}
 				<input type="hidden" name="time" value={activeTimeFilter} />
 			{/if}
+			{#if activeCategory !== 'all'}
+				<input type="hidden" name="category" value={activeCategory} />
+			{/if}
+			{#if activePublisher !== 'all'}
+				<input type="hidden" name="source" value={activePublisher} />
+			{/if}
 
 			{#if suggestionsOpen}
 				<div class="search-suggestions">

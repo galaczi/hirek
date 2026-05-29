@@ -236,6 +236,7 @@
 	function updateFilter(name: 'category' | 'source' | 'time', value: string) {
 		if (!browser) return;
 		const params = new URLSearchParams(page.url.searchParams);
+		const isSearchRoute = page.url.pathname.startsWith('/kereses');
 		let nextSource = data.activePublisher === 'all' ? '' : data.activePublisher;
 		let nextCategory = data.activeCategory === 'all' ? '' : data.activeCategory;
 
@@ -246,9 +247,28 @@
 			else params.set('time', value);
 		}
 
+		if (isSearchRoute) {
+			setFilterParam(params, 'source', nextSource);
+			setFilterParam(params, 'category', nextCategory);
+			const query = params.toString();
+			void goto(query ? `/kereses/?${query}` : '/kereses/', {
+				keepFocus: true,
+				noScroll: true
+			});
+			return;
+		}
+
 		const query = params.toString();
 		const path = getHomePath(nextSource, nextCategory);
 		void goto(query ? `${path}?${query}` : path, { keepFocus: true, noScroll: true });
+	}
+
+	function setFilterParam(params: URLSearchParams, key: 'source' | 'category', value: string) {
+		if (!value) {
+			params.delete(key);
+			return;
+		}
+		params.set(key, value);
 	}
 
 	function getHomePath(source: string, category: string) {

@@ -16,6 +16,11 @@
 		error: 'Hibás',
 		inactive: 'Inaktív'
 	};
+	const approvalStatusLabels: Record<string, string> = {
+		pending: 'Jóváhagyásra vár',
+		approved: 'Jóváhagyott',
+		rejected: 'Elutasított'
+	};
 
 	function formatOptionalDate(value: string | null) {
 		if (!value) return 'nincs adat';
@@ -70,13 +75,16 @@
 	<section class="panel source-health-panel">
 		<div class="panel-heading-row">
 			<div>
-				<p class="section-kicker">Forrás állapota</p>
-				<h3 class="compact-title">
-					<span class:active={data.selectedSource.status === 'ingesting'} class="moderation-status">
-						{sourceStatusLabels[data.selectedSource.status] ?? data.selectedSource.status}
-					</span>
-					<span>{data.selectedSource.activeFeedCount}/{data.selectedSource.totalFeedCount} aktív feed</span>
-				</h3>
+			<p class="section-kicker">Forrás állapota</p>
+			<h3 class="compact-title">
+				<span class="moderation-status" class:active={data.selectedSource.approvalStatus === 'approved'}>
+					{approvalStatusLabels[data.selectedSource.approvalStatus] ?? data.selectedSource.approvalStatus}
+				</span>
+				<span class:active={data.selectedSource.status === 'ingesting'} class="moderation-status">
+					{sourceStatusLabels[data.selectedSource.status] ?? data.selectedSource.status}
+				</span>
+				<span>{data.selectedSource.activeFeedCount}/{data.selectedSource.totalFeedCount} aktív feed</span>
+			</h3>
 			</div>
 			<span>{formatOptionalDate(data.selectedSource.lastFetchedAt)}</span>
 		</div>
@@ -104,6 +112,30 @@
 			</label>
 			<button class="load-more-btn" type="submit">Állapot mentése</button>
 		</form>
+		<div class="panel-heading-row">
+			<form method="POST" action="?/approveSource">
+				<button
+					type="submit"
+					class="load-more-btn"
+					disabled={data.selectedSource.approvalStatus === 'approved'}
+				>
+					Jóváhagyás
+				</button>
+			</form>
+			<form method="POST" action="?/rejectSource">
+				<button
+					type="submit"
+					disabled={data.selectedSource.approvalStatus === 'rejected'}
+				>
+					Elutasítás
+				</button>
+			</form>
+		</div>
+		{#if !data.selectedSource.canConfigure}
+			<p class="form-hint">
+				A feed- és URL-szabály kezelés csak jóváhagyott forrásoknál érhető el.
+			</p>
+		{/if}
 	</section>
 </section>
 
@@ -117,13 +149,15 @@
 
 	<form class="admin-form rule-inline-form" method="POST" action="?/addFeed">
 		<input name="feedUrl" placeholder="https://domain.hu/rss" required />
-		<select name="categoryId">
+		<select name="categoryId" disabled={!data.selectedSource.canConfigure}>
 			<option value="none">Nincs fix rovat</option>
 			{#each data.categories as category (category.id)}
 				<option value={category.id}>{category.name}</option>
 			{/each}
 		</select>
-		<button class="load-more-btn" type="submit">Feed hozzáadása</button>
+		<button class="load-more-btn" type="submit" disabled={!data.selectedSource.canConfigure}>
+			Feed hozzáadása
+		</button>
 	</form>
 
 	<div class="feed-editor-list">
@@ -140,14 +174,18 @@
 				<form class="feed-editor-row" method="POST" action="?/updateFeed">
 					<input type="hidden" name="feedId" value={feed.id} />
 					<span title={feed.feedUrl}>{feed.feedUrl}</span>
-					<select name="status" aria-label="Feed állapot">
+					<select name="status" aria-label="Feed állapot" disabled={!data.selectedSource.canConfigure}>
 						{#each data.feedStatuses as status (status)}
 							<option value={status} selected={feed.status === status}>
 								{feedStatusLabels[status] ?? status}
 							</option>
 						{/each}
 					</select>
-					<select name="categoryId" aria-label="Fix rovat">
+					<select
+						name="categoryId"
+						aria-label="Fix rovat"
+						disabled={!data.selectedSource.canConfigure}
+					>
 						<option value="none">Nincs</option>
 						{#each data.categories as category (category.id)}
 							<option value={category.id} selected={feed.categoryId === category.id}>
@@ -156,8 +194,13 @@
 						{/each}
 					</select>
 					<span>{formatOptionalDate(feed.lastFetchedAt)}</span>
-					<input name="lastError" value={feed.lastError ?? ''} placeholder="Hibaüzenet" />
-					<button type="submit">Mentés</button>
+					<input
+						name="lastError"
+						value={feed.lastError ?? ''}
+						placeholder="Hibaüzenet"
+						disabled={!data.selectedSource.canConfigure}
+					/>
+					<button type="submit" disabled={!data.selectedSource.canConfigure}>Mentés</button>
 				</form>
 			{/each}
 		{/if}
@@ -175,12 +218,14 @@
 
 	<form class="admin-form rule-inline-form" method="POST" action="?/addRule">
 		<input name="urlPattern" placeholder={`${data.selectedSource.domain}/rovat/*`} required />
-		<select name="categoryId" required>
+		<select name="categoryId" required disabled={!data.selectedSource.canConfigure}>
 			{#each data.categories as category (category.id)}
 				<option value={category.id}>{category.name}</option>
 			{/each}
 		</select>
-		<button class="load-more-btn" type="submit">Szabály hozzáadása</button>
+		<button class="load-more-btn" type="submit" disabled={!data.selectedSource.canConfigure}>
+			Szabály hozzáadása
+		</button>
 	</form>
 
 	<div class="rules-list">
@@ -199,7 +244,7 @@
 					<span>{rule.categoryName}</span>
 					<form method="POST" action="?/deleteRule">
 						<input type="hidden" name="ruleId" value={rule.id} />
-						<button type="submit">Törlés</button>
+						<button type="submit" disabled={!data.selectedSource.canConfigure}>Törlés</button>
 					</form>
 				</div>
 			{/each}

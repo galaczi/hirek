@@ -28,5 +28,9 @@
 			<p class="form-error">{form.error}</p>
 		{/if}
 		<button class="load-more-btn" type="submit">Belépés</button>
+		<p class="form-hint">
+			Partner vagy és új forrást szeretnél beküldeni?
+			<a class="secondary-link" href="/partner/jelentkezes/">Jelentkezz itt</a>.
+		</p>
 	</form>
 </main>

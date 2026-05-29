@@ -16,6 +16,7 @@ export const sources = pgTable(
 		slug: text('slug').notNull(),
 		name: text('name').notNull(),
 		domain: text('domain').notNull(),
+		approvalStatus: text('approval_status').notNull().default('approved'),
 		status: text('status').notNull().default('ingesting'),
 		statusNote: text('status_note'),
 		partnerPackage: text('partner_package').notNull().default('free'),
@@ -30,6 +31,7 @@ export const sources = pgTable(
 	(table) => ({
 		slugIdx: uniqueIndex('sources_slug_idx').on(table.slug),
 		domainIdx: index('sources_domain_idx').on(table.domain),
+		approvalStatusIdx: index('sources_approval_status_idx').on(table.approvalStatus),
 		statusIdx: index('sources_status_idx').on(table.status),
 		partnerStatusIdx: index('sources_partner_status_idx').on(table.partnerStatus)
 	})

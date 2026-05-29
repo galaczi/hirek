@@ -22,6 +22,7 @@ type SourceRegistryRow = {
 	slug: string;
 	name: string;
 	domain: string;
+	approval_status: string;
 	status: string;
 	status_note: string | null;
 	partner_package: string;
@@ -104,6 +105,7 @@ export const load: PageServerLoad = async (event) => {
 				s.slug,
 				s.name,
 				s.domain,
+				s.approval_status,
 				s.status,
 				s.status_note,
 				s.partner_package,
@@ -153,6 +155,7 @@ export const load: PageServerLoad = async (event) => {
 			slug: row.slug,
 			name: row.name,
 			domain: row.domain,
+			approvalStatus: row.approval_status,
 			status: row.status,
 			statusNote: row.status_note,
 			partnerPackage: row.partner_package,

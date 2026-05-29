@@ -1,6 +1,6 @@
 import { asc, eq, sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
-import { sourceFeeds } from '$lib/server/db/schema';
+import { sourceFeeds, sources } from '$lib/server/db/schema';
 import { discoverHirkeresoSources, discoverMissingSourceFeeds } from './source-discovery';
 import { ingestFeedById } from './feed-ingestion';
 import { reindexArticles } from './reindex';
@@ -45,7 +45,8 @@ export async function enqueueActiveFeedJobs(limit = 100) {
 	const feeds = await db
 		.select({ id: sourceFeeds.id })
 		.from(sourceFeeds)
-		.where(eq(sourceFeeds.status, 'active'))
+		.innerJoin(sources, eq(sources.id, sourceFeeds.sourceId))
+		.where(sql`${sourceFeeds.status} = 'active' AND ${sources.approvalStatus} = 'approved'`)
 		.orderBy(asc(sourceFeeds.lastFetchedAt), asc(sourceFeeds.id))
 		.limit(limit);
 

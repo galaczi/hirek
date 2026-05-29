@@ -14,6 +14,7 @@ export function matchesTimeFilter(article: Article, filter: string) {
 	if (filter === '4h') return hoursAgo <= 4;
 	if (filter === '12h') return hoursAgo <= 12;
 	if (filter === '24h') return hoursAgo <= 24;
+	if (filter === '7d') return hoursAgo <= 24 * 7;
 
 	return true;
 }

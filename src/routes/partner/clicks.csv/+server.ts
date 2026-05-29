@@ -4,6 +4,7 @@ import type { RequestHandler } from './$types';
 import { requirePartnerAccess } from '$lib/server/admin/auth';
 import { db } from '$lib/server/db';
 import { articles, categories, clickEvents, sources } from '$lib/server/db/schema';
+import { requireApprovedSourceForConfig } from '$lib/server/sources/approval';
 
 const REPORT_RANGES = [7, 30, 90];
 
@@ -15,6 +16,7 @@ export const GET: RequestHandler = async (event) => {
 	if (!access.sourceId) {
 		error(400, 'Admin exporthoz válassz partnerforrást.');
 	}
+	await requireApprovedSourceForConfig(access.sourceId);
 
 	const where = and(eq(clickEvents.sourceId, access.sourceId), gte(clickEvents.createdAt, reportSince));
 

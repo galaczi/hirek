@@ -5,12 +5,18 @@ import { requireAdmin } from '$lib/server/admin/auth';
 import { upsertSourceCategoryRule, deleteSourceCategoryRule } from '$lib/server/categorization/url-rules';
 import { db } from '$lib/server/db';
 import { categories, sourceCategoryRules, sourceFeeds, sources } from '$lib/server/db/schema';
+import {
+	getApprovedSourceStatus,
+	getSourceApprovalContext,
+	isApprovedSource
+} from '$lib/server/sources/approval';
 
 type SourceDetailRow = {
 	id: number;
 	slug: string;
 	name: string;
 	domain: string;
+	approval_status: string;
 	status: string;
 	status_note: string | null;
 	total_feed_count: string | number;
@@ -33,6 +39,7 @@ export const load: PageServerLoad = async (event) => {
 				s.slug,
 				s.name,
 				s.domain,
+				s.approval_status,
 				s.status,
 				s.status_note,
 				count(sf.id) AS total_feed_count,
@@ -85,10 +92,12 @@ export const load: PageServerLoad = async (event) => {
 			slug: source.slug,
 			name: source.name,
 			domain: source.domain,
+			approvalStatus: source.approval_status,
 			status: source.status,
 			statusNote: source.status_note,
 			totalFeedCount: Number(source.total_feed_count),
 			activeFeedCount: Number(source.active_feed_count),
+			canConfigure: source.approval_status === 'approved',
 			lastFetchedAt: source.last_fetched_at ? toIsoString(source.last_fetched_at) : null,
 			lastError: source.last_error
 		},
@@ -138,14 +147,48 @@ export const actions: Actions = {
 
 		return { ok: true, action: 'updateSourceStatus' };
 	},
+	approveSource: async (event) => {
+		requireAdmin(event);
+		const sourceId = parseSourceId(event.params.sourceId);
+		const source = await getSourceApprovalContext(sourceId);
+
+		await db
+			.update(sources)
+			.set({
+				approvalStatus: 'approved',
+				status: getApprovedSourceStatus(source.status, source.activeFeedCount),
+				updatedAt: new Date()
+			})
+			.where(eq(sources.id, sourceId));
+
+		return { ok: true, action: 'approveSource' };
+	},
+	rejectSource: async (event) => {
+		requireAdmin(event);
+		const sourceId = parseSourceId(event.params.sourceId);
+
+		await db
+			.update(sources)
+			.set({
+				approvalStatus: 'rejected',
+				updatedAt: new Date()
+			})
+			.where(eq(sources.id, sourceId));
+
+		return { ok: true, action: 'rejectSource' };
+	},
 	addFeed: async (event) => {
 		requireAdmin(event);
 		const sourceId = parseSourceId(event.params.sourceId);
+		const source = await getSourceApprovalContext(sourceId);
 		const form = await event.request.formData();
 		const feedUrl = String(form.get('feedUrl') ?? '').trim();
 		const categoryId = parseOptionalId(form.get('categoryId'));
 
 		if (!feedUrl) return fail(400, { action: 'addFeed', error: 'Feed URL szükséges.' });
+		if (!isApprovedSource(source.approvalStatus)) {
+			return fail(409, { action: 'addFeed', error: 'A forrás jóváhagyása szükséges ehhez a művelethez.' });
+		}
 
 		await db
 			.insert(sourceFeeds)
@@ -160,6 +203,7 @@ export const actions: Actions = {
 	updateFeed: async (event) => {
 		requireAdmin(event);
 		const sourceId = parseSourceId(event.params.sourceId);
+		const source = await getSourceApprovalContext(sourceId);
 		const form = await event.request.formData();
 		const feedId = Number(form.get('feedId'));
 		const status = String(form.get('status') ?? '');
@@ -168,6 +212,9 @@ export const actions: Actions = {
 
 		if (!Number.isInteger(feedId) || !FEED_STATUSES.includes(status)) {
 			return fail(400, { action: 'updateFeed', error: 'Érvénytelen feed.' });
+		}
+		if (!isApprovedSource(source.approvalStatus)) {
+			return fail(409, { action: 'updateFeed', error: 'A forrás jóváhagyása szükséges ehhez a művelethez.' });
 		}
 
 		await db
@@ -180,12 +227,16 @@ export const actions: Actions = {
 	addRule: async (event) => {
 		requireAdmin(event);
 		const sourceId = parseSourceId(event.params.sourceId);
+		const source = await getSourceApprovalContext(sourceId);
 		const form = await event.request.formData();
 		const categoryId = Number(form.get('categoryId'));
 		const urlPattern = String(form.get('urlPattern') ?? '');
 
 		if (!Number.isInteger(categoryId) || !urlPattern.trim()) {
 			return fail(400, { action: 'addRule', error: 'Rovat és URL minta szükséges.' });
+		}
+		if (!isApprovedSource(source.approvalStatus)) {
+			return fail(409, { action: 'addRule', error: 'A forrás jóváhagyása szükséges ehhez a művelethez.' });
 		}
 
 		await upsertSourceCategoryRule({ sourceId, categoryId, urlPattern });
@@ -194,11 +245,15 @@ export const actions: Actions = {
 	deleteRule: async (event) => {
 		requireAdmin(event);
 		const sourceId = parseSourceId(event.params.sourceId);
+		const source = await getSourceApprovalContext(sourceId);
 		const form = await event.request.formData();
 		const ruleId = Number(form.get('ruleId'));
 
 		if (!Number.isInteger(ruleId)) {
 			return fail(400, { action: 'deleteRule', error: 'Érvénytelen szabály.' });
+		}
+		if (!isApprovedSource(source.approvalStatus)) {
+			return fail(409, { action: 'deleteRule', error: 'A forrás jóváhagyása szükséges ehhez a művelethez.' });
 		}
 
 		await deleteSourceCategoryRule(sourceId, ruleId);

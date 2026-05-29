@@ -6,6 +6,11 @@
 	const sourceStatuses = ['ingesting', 'needs_rss', 'needs_adapter', 'blocked', 'pending', 'disabled'];
 	const partnerPackages = ['free', 'partner', 'growth'];
 	const partnerStatuses = ['none', 'trial', 'active', 'paused', 'cancelled'];
+	const approvalStatusLabels: Record<string, string> = {
+		pending: 'Jóváhagyásra vár',
+		approved: 'Jóváhagyott',
+		rejected: 'Elutasított'
+	};
 	const sourceStatusLabels: Record<string, string> = {
 		ingesting: 'Gyűjtés alatt',
 		needs_rss: 'RSS szükséges',
@@ -130,6 +135,7 @@
 					<a class="top-title" href={`/${source.slug}/`}>{source.name}</a>
 					<div class="top-meta">
 						<span>{source.domain}</span>
+						<span>{approvalStatusLabels[source.approvalStatus] ?? source.approvalStatus}</span>
 						<span>{source.activeFeedCount}/{source.feedCount} aktív feed</span>
 						<span>{source.articleCount} cikk</span>
 						<span>{source.clickCount} kattintás</span>

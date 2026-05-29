@@ -15,6 +15,7 @@ import {
 import { getArticleSearchDocuments } from '$lib/server/articles/search-documents';
 import { indexArticles } from '$lib/server/search/meili';
 import { upsertSourceCategoryRule } from '$lib/server/categorization/url-rules';
+import { getSourceApprovalContext, isApprovedSource } from '$lib/server/sources/approval';
 
 type ClicksOverTimeRow = {
 	day: string;
@@ -40,6 +41,8 @@ type AvailableSourceRow = {
 	slug: string;
 	name: string;
 	domain: string;
+	approval_status: string;
+	partner_package: string;
 	status: string;
 	article_count: string | number;
 	click_count: string | number;
@@ -58,13 +61,15 @@ export const load: PageServerLoad = async (event) => {
 
 	if (access.isAdmin && !scopedSourceId) {
 		const [availableSourceRows, categoryRows] = await Promise.all([
-			db.execute<AvailableSourceRow>(sql`
-				SELECT
-					s.id,
-					s.slug,
-					s.name,
-					s.domain,
-					s.status,
+				db.execute<AvailableSourceRow>(sql`
+					SELECT
+						s.id,
+						s.slug,
+						s.name,
+						s.domain,
+						s.approval_status,
+						s.partner_package,
+						s.status,
 					(
 						SELECT count(*)::int
 						FROM articles a
@@ -110,19 +115,85 @@ export const load: PageServerLoad = async (event) => {
 				id: row.id,
 				slug: row.slug,
 				name: row.name,
-				domain: row.domain,
-				status: row.status,
-				articleCount: Number(row.article_count),
-				clickCount: Number(row.click_count),
+					domain: row.domain,
+					approvalStatus: row.approval_status,
+					partnerPackage: row.partner_package,
+					status: row.status,
+					articleCount: Number(row.article_count),
+					clickCount: Number(row.click_count),
 				uniqueClickCount: Number(row.unique_click_count),
 				lastFetchedAt: row.last_fetched_at ? toIsoString(row.last_fetched_at) : null
 			})),
+			sourceState: null,
 			sourceRules: [],
 			feedHealth: [],
 			sourceSettings: null,
 			clicksOverTime: [],
 			topCategories: [],
 			trafficSources: []
+			};
+		}
+
+	const [sourceStateRow] = scopedSourceId
+		? await db
+				.select({
+					sourceId: sources.id,
+					sourceName: sources.name,
+					sourceDomain: sources.domain,
+					approvalStatus: sources.approvalStatus,
+					partnerPackage: sources.partnerPackage,
+					status: sources.status,
+					statusNote: sources.statusNote
+				})
+				.from(sources)
+				.where(eq(sources.id, scopedSourceId))
+				.limit(1)
+		: [];
+
+	if (!sourceStateRow) {
+		return {
+			sourceStats: [],
+			topArticles: [],
+			recentClicks: [],
+			categories: [],
+			partnerSourceId: scopedSourceId,
+			isAdmin: access.isAdmin,
+			reportDays,
+			reportRanges: REPORT_RANGES,
+			availableSources: [],
+			sourceRules: [],
+			feedHealth: [],
+			sourceSettings: null,
+			clicksOverTime: [],
+			topCategories: [],
+			trafficSources: [],
+			sourceState: null
+		};
+	}
+
+	const sourceState = {
+		...sourceStateRow,
+		isApproved: isApprovedSource(sourceStateRow.approvalStatus)
+	};
+
+	if (!sourceState.isApproved) {
+		return {
+			sourceStats: [],
+			topArticles: [],
+			recentClicks: [],
+			categories: [],
+			partnerSourceId: scopedSourceId,
+			isAdmin: access.isAdmin,
+			reportDays,
+			reportRanges: REPORT_RANGES,
+			availableSources: [],
+			sourceRules: [],
+			feedHealth: [],
+			sourceSettings: null,
+			clicksOverTime: [],
+			topCategories: [],
+			trafficSources: [],
+			sourceState
 		};
 	}
 
@@ -318,14 +389,15 @@ export const load: PageServerLoad = async (event) => {
 			isUnique: row.isUnique,
 			createdAt: toIsoString(row.createdAt)
 		})),
-		categories: categoryRows,
-		partnerSourceId: scopedSourceId,
-		isAdmin: access.isAdmin,
-		reportDays,
-		reportRanges: REPORT_RANGES,
-		availableSources: [],
-		sourceRules: ruleRows,
-		feedHealth: feedRows.map((row) => ({
+			categories: categoryRows,
+			partnerSourceId: scopedSourceId,
+			isAdmin: access.isAdmin,
+			reportDays,
+			reportRanges: REPORT_RANGES,
+			availableSources: [],
+			sourceState,
+			sourceRules: ruleRows,
+			feedHealth: feedRows.map((row) => ({
 			feedId: row.feedId,
 			sourceName: row.sourceName,
 			feedUrl: row.feedUrl,
@@ -419,6 +491,13 @@ export const actions: Actions = {
 		if (!sourceId || !categorySlug || !urlPattern.trim()) {
 			return { ok: false, action: 'addUrlRule', error: 'Source, category and URL pattern are required.' };
 		}
+		if (!isApprovedSource((await getSourceApprovalContext(sourceId)).approvalStatus)) {
+			return {
+				ok: false,
+				action: 'addUrlRule',
+				error: 'A forrás jóváhagyása szükséges ehhez a művelethez.'
+			};
+		}
 
 		const [category] = await db
 			.select({ id: categories.id })
@@ -439,6 +518,13 @@ export const actions: Actions = {
 		if (!sourceId || !Number.isInteger(ruleId)) {
 			return { ok: false, action: 'deleteUrlRule', error: 'Invalid rule.' };
 		}
+		if (!isApprovedSource((await getSourceApprovalContext(sourceId)).approvalStatus)) {
+			return {
+				ok: false,
+				action: 'deleteUrlRule',
+				error: 'A forrás jóváhagyása szükséges ehhez a művelethez.'
+			};
+		}
 
 		await db
 			.delete(sourceCategoryRules)
@@ -452,6 +538,13 @@ export const actions: Actions = {
 
 		if (!sourceId) {
 			return { ok: false, action: 'updateUtmSettings', error: 'Nincs kiválasztott forrás.' };
+		}
+		if (!isApprovedSource((await getSourceApprovalContext(sourceId)).approvalStatus)) {
+			return {
+				ok: false,
+				action: 'updateUtmSettings',
+				error: 'A forrás jóváhagyása szükséges ehhez a művelethez.'
+			};
 		}
 
 		const utmSource = normalizeUtmValue(form.get('utmSource'), 'hirek.hu');

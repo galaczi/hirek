@@ -106,7 +106,8 @@ export async function discoverHirkeresoSources() {
 	if (discovered.size > 0) {
 		await db.execute(sql`
 			DELETE FROM sources s
-			WHERE s.status = 'pending'
+			WHERE s.approval_status = 'approved'
+				AND s.status = 'pending'
 				AND NOT EXISTS (SELECT 1 FROM articles a WHERE a.source_id = s.id)
 				AND NOT EXISTS (SELECT 1 FROM source_feeds sf WHERE sf.source_id = s.id)
 		`);
@@ -114,8 +115,8 @@ export async function discoverHirkeresoSources() {
 
 	for (const source of discovered.values()) {
 		await db.execute(sql`
-			INSERT INTO sources (slug, name, domain, status, updated_at)
-			VALUES (${source.slug}, ${source.name}, ${source.domain}, 'pending', now())
+			INSERT INTO sources (slug, name, domain, approval_status, status, updated_at)
+			VALUES (${source.slug}, ${source.name}, ${source.domain}, 'approved', 'pending', now())
 			ON CONFLICT (slug) DO UPDATE SET
 				name = excluded.name,
 				domain = excluded.domain,
@@ -148,7 +149,8 @@ export async function discoverMissingSourceFeeds(limit = 20) {
 	}>(sql`
 		SELECT s.id, s.slug, s.name, s.domain, s.status
 		FROM sources s
-		WHERE s.status IN ('needs_rss', 'pending')
+		WHERE s.approval_status = 'approved'
+			AND s.status IN ('needs_rss', 'pending')
 			AND NOT EXISTS (
 				SELECT 1
 				FROM source_feeds sf
@@ -187,6 +189,7 @@ export async function discoverMissingSourceFeeds(limit = 20) {
 					status_note = ${result.error ?? 'No RSS/Atom feed found at common endpoints.'},
 					updated_at = now()
 				WHERE id = ${source.id}
+					AND approval_status = 'approved'
 					AND status IN ('needs_rss', 'pending')
 			`);
 		}
