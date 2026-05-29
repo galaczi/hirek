@@ -1,0 +1,58 @@
+import { sql } from 'drizzle-orm';
+import type { Actions, PageServerLoad } from './$types';
+import { requireAdmin } from '$lib/server/admin/auth';
+import { db } from '$lib/server/db';
+import {
+	enqueueActiveFeedJobs,
+	enqueueIngestionJob,
+	getIngestionQueueOverview,
+	runQueuedIngestionJobs,
+	seedSourceRegistry
+} from '$lib/server/ingestion';
+
+export const load: PageServerLoad = async (event) => {
+	requireAdmin(event);
+
+	const [feedStats, queueOverview] = await Promise.all([
+		db.execute<{ status: string; count: string | number }>(sql`
+			SELECT status, count(*) AS count
+			FROM source_feeds
+			GROUP BY status
+			ORDER BY status ASC
+		`),
+		getIngestionQueueOverview()
+	]);
+
+	return {
+		feedStats: feedStats.map((row) => ({ status: row.status, count: Number(row.count) })),
+		jobStats: queueOverview.jobStats,
+		recentJobs: queueOverview.recentJobs
+	};
+};
+
+export const actions: Actions = {
+	seed: async (event) => {
+		requireAdmin(event);
+		return { ok: true, action: 'seed', result: await seedSourceRegistry() };
+	},
+	discover: async (event) => {
+		requireAdmin(event);
+		const id = await enqueueIngestionJob('discover-hirkereso');
+		return { ok: true, action: 'discover', jobId: id };
+	},
+	enqueueFeeds: async (event) => {
+		requireAdmin(event);
+		const count = await enqueueActiveFeedJobs(100);
+		return { ok: true, action: 'enqueueFeeds', count };
+	},
+	run: async (event) => {
+		requireAdmin(event);
+		const results = await runQueuedIngestionJobs(10);
+		return { ok: true, action: 'run', results };
+	},
+	reindex: async (event) => {
+		requireAdmin(event);
+		const id = await enqueueIngestionJob('reindex-meili');
+		return { ok: true, action: 'reindex', jobId: id };
+	}
+};

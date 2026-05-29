@@ -1,0 +1,48 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1780004520385,
+      "tag": "0000_tiny_madame_masque",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1780004521000,
+      "tag": "0001_search_extensions",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1780004522000,
+      "tag": "0002_ingestion_registry",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1780004523000,
+      "tag": "0003_ingestion_jobs",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1780004524000,
+      "tag": "0004_pgmq_categorization",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1780004525000,
+      "tag": "0005_better_auth",
+      "breakpoints": true
+    }
+  ]
+}

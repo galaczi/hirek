@@ -1,0 +1,70 @@
+services:
+  postgres:
+    image: ghcr.io/pgmq/pg17-pgmq:v1.10.0
+    container_name: hirek-postgres
+    user: root
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hirek}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hirek}
+      POSTGRES_DB: ${POSTGRES_DB:-hirek}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hirek} -d ${POSTGRES_DB:-hirek}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  meilisearch:
+    image: getmeili/meilisearch:latest
+    container_name: hirek-meilisearch
+    restart: unless-stopped
+    environment:
+      MEILI_ENV: development
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-hirek_dev_master_key}
+      MEILI_NO_ANALYTICS: "true"
+    ports:
+      - "${MEILI_PORT:-7700}:7700"
+    volumes:
+      - meili-data:/meili_data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--spider",
+          "http://127.0.0.1:7700/health"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  worker:
+    image: node:22-bookworm-slim
+    container_name: hirek-worker
+    restart: unless-stopped
+    working_dir: /app
+    command: npm run worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-hirek}:${POSTGRES_PASSWORD:-hirek}@postgres:5432/${POSTGRES_DB:-hirek}
+      MEILI_HOST: http://meilisearch:7700
+      MEILI_API_KEY: ${MEILI_API_KEY:-hirek_dev_master_key}
+      MEILI_ARTICLES_INDEX: ${MEILI_ARTICLES_INDEX:-articles}
+      INGESTION_WORKER_POLL_MS: ${INGESTION_WORKER_POLL_MS:-60000}
+      INGESTION_WORKER_FEED_LIMIT: ${INGESTION_WORKER_FEED_LIMIT:-100}
+      INGESTION_WORKER_JOB_LIMIT: ${INGESTION_WORKER_JOB_LIMIT:-10}
+    volumes:
+      - .:/app
+
+volumes:
+  postgres-data:
+  meili-data:
