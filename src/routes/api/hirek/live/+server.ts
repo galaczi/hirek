@@ -1,12 +1,20 @@
 import type { RequestHandler } from './$types';
+import type { Article } from '$lib/home/data';
+import { matchesTimeFilter } from '$lib/home/utils';
 import { createLiveArticleListener } from '$lib/server/live/articles';
 
 const encoder = new TextEncoder();
 
-export const GET: RequestHandler = async ({ request }) => {
+export const GET: RequestHandler = async ({ request, url }) => {
 	let closeListener: (() => Promise<void>) | undefined;
 	let heartbeat: ReturnType<typeof setInterval> | undefined;
 	let closed = false;
+	const filters = {
+		category: cleanFilter(url.searchParams.get('category')),
+		source: cleanFilter(url.searchParams.get('source')),
+		time: url.searchParams.get('time') ?? 'all',
+		q: url.searchParams.get('q')?.trim().toLocaleLowerCase('hu-HU') ?? ''
+	};
 
 	const cleanup = (controller?: ReadableStreamDefaultController<Uint8Array>) => {
 		if (closed) return;
@@ -32,6 +40,7 @@ export const GET: RequestHandler = async ({ request }) => {
 			}, 25_000);
 
 			const listener = await createLiveArticleListener((article) => {
+				if (!matchesLiveFilters(article, filters)) return;
 				send('article', article);
 			});
 			closeListener = listener.close;
@@ -54,3 +63,31 @@ export const GET: RequestHandler = async ({ request }) => {
 		}
 	});
 };
+
+function cleanFilter(value: string | null) {
+	const clean = value?.trim();
+	return clean && clean !== 'all' ? clean : undefined;
+}
+
+function matchesLiveFilters(
+	article: Article,
+	filters: { category?: string; source?: string; time: string; q: string }
+) {
+	if (filters.category && !article.categorySlugs.includes(filters.category)) return false;
+	if (filters.source && article.source !== filters.source) return false;
+	if (!matchesTimeFilter(article, filters.time)) return false;
+	if (filters.q && !articleMatchesQuery(article, filters.q)) return false;
+	return true;
+}
+
+function articleMatchesQuery(article: Article, query: string) {
+	return [
+		article.title,
+		article.sourceName,
+		article.categoryName,
+		...article.categorySlugs
+	]
+		.join(' ')
+		.toLocaleLowerCase('hu-HU')
+		.includes(query);
+}

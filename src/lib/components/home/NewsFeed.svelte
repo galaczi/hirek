@@ -10,8 +10,9 @@
 		visibleCount = $bindable(18),
 		filteredArticles,
 		visibleArticles,
+		freshArticleIds = [],
 		categoryNames,
-		bookmarks,
+		bookmarkedIds,
 		searchQuery = '',
 		searchTotal = null,
 		searchEngine = null,
@@ -27,15 +28,16 @@
 		visibleCount: number;
 		filteredArticles: Article[];
 		visibleArticles: Article[];
+		freshArticleIds?: number[];
 		categoryNames: Record<string, string>;
-		bookmarks: number[];
+		bookmarkedIds: number[];
 		searchQuery?: string;
 		searchTotal?: number | null;
 		searchEngine?: 'meilisearch' | 'postgres' | null;
 		searchError?: string | null;
 		onPublisherToggle: (slug: string) => void;
 		onTimeFilterChange: (value: string) => void;
-		onBookmarkToggle: (id: number) => void;
+		onBookmarkToggle: (article: Article) => void;
 	} = $props();
 </script>
 
@@ -89,7 +91,7 @@
 			</div>
 		{:else}
 			{#each visibleArticles as article (article.id)}
-				<article class="news-item">
+				<article class:fresh-arrival={freshArticleIds.includes(article.id)} class="news-item">
 					<div class="news-item-left">
 						<span class={`recency-indicator ${recencyClass(article)}`} title="Frissesség"></span>
 						<span class="news-time">{formatTime(article.publishedAt)}</span>
@@ -100,12 +102,12 @@
 						<span class="item-cat-badge">{categoryNames[article.category]}</span>
 						<button
 							type="button"
-							class:saved={bookmarks.includes(article.id)}
+							class:saved={bookmarkedIds.includes(article.id)}
 							class="bookmark-btn"
-							onclick={() => onBookmarkToggle(article.id)}
-							aria-label={bookmarks.includes(article.id) ? 'Könyvjelző eltávolítása' : 'Könyvjelző hozzáadása'}
+							onclick={() => onBookmarkToggle(article)}
+							aria-label={bookmarkedIds.includes(article.id) ? 'Könyvjelző eltávolítása' : 'Könyvjelző hozzáadása'}
 						>
-							<svg xmlns="http://www.w3.org/2000/svg" fill={bookmarks.includes(article.id) ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+							<svg xmlns="http://www.w3.org/2000/svg" fill={bookmarkedIds.includes(article.id) ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
 								<path stroke-linecap="round" stroke-linejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0 1 11.186 0Z" />
 							</svg>
 						</button>

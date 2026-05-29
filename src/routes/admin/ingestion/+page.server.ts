@@ -6,6 +6,7 @@ import {
 	enqueueActiveFeedJobs,
 	enqueueIngestionJob,
 	getIngestionQueueOverview,
+	discoverMissingSourceFeeds,
 	runQueuedIngestionJobs,
 	seedSourceRegistry
 } from '$lib/server/ingestion';
@@ -39,6 +40,15 @@ export const actions: Actions = {
 		requireAdmin(event);
 		const id = await enqueueIngestionJob('discover-hirkereso');
 		return { ok: true, action: 'discover', jobId: id };
+	},
+	discoverFeeds: async (event) => {
+		requireAdmin(event);
+		return { ok: true, action: 'discoverFeeds', result: await discoverMissingSourceFeeds(20) };
+	},
+	discoverAllFeeds: async (event) => {
+		requireAdmin(event);
+		const id = await enqueueIngestionJob('discover-source-feeds', { limit: 1000 });
+		return { ok: true, action: 'discoverAllFeeds', jobId: id };
 	},
 	enqueueFeeds: async (event) => {
 		requireAdmin(event);

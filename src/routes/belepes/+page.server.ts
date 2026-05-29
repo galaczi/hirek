@@ -37,7 +37,7 @@ export const actions: Actions = {
 };
 
 function defaultRedirect(role: string) {
-	return role === 'admin' ? '/admin/ingestion' : '/partner';
+	return role === 'admin' ? '/admin' : '/partner';
 }
 
 function sanitizeRedirect(value: string | null) {

@@ -16,6 +16,10 @@ type ArticleDocumentRow = {
 
 export async function getArticleSearchDocuments(articleIds: number[]) {
 	if (articleIds.length === 0) return [];
+	const articleIdList = sql.join(
+		articleIds.map((id) => sql`${id}`),
+		sql`, `
+	);
 
 	const rows = await db.execute<ArticleDocumentRow>(sql`
 		SELECT
@@ -32,7 +36,7 @@ export async function getArticleSearchDocuments(articleIds: number[]) {
 		INNER JOIN sources s ON s.id = a.source_id
 		LEFT JOIN article_categories ac ON ac.article_id = a.id
 		LEFT JOIN categories c ON c.id = ac.category_id
-		WHERE a.id = ANY(${articleIds})
+		WHERE a.id IN (${articleIdList})
 			AND a.active = true
 		GROUP BY a.id, s.id
 	`);

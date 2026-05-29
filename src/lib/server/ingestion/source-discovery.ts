@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { seedCategories } from './seed-data';
+import { parseFeed } from './rss';
 
 const discoveryPages = [
 	{ url: 'https://www.hirkereso.hu/', categorySlug: 'minden' },
@@ -47,6 +48,16 @@ type DiscoveredSource = {
 	domain: string;
 	categories: Set<string>;
 	pages: Set<string>;
+};
+
+type FeedProbeResult = {
+	sourceId: number;
+	slug: string;
+	name: string;
+	domain: string;
+	feedUrl: string | null;
+	itemCount: number;
+	error: string | null;
 };
 
 export async function discoverHirkeresoSources() {
@@ -125,6 +136,128 @@ export async function discoverHirkeresoSources() {
 				pages: [...source.pages]
 			}))
 	};
+}
+
+export async function discoverMissingSourceFeeds(limit = 20) {
+	const rows = await db.execute<{
+		id: number;
+		slug: string;
+		name: string;
+		domain: string;
+		status: string;
+	}>(sql`
+		SELECT s.id, s.slug, s.name, s.domain, s.status
+		FROM sources s
+		WHERE s.status IN ('needs_rss', 'pending')
+			AND NOT EXISTS (
+				SELECT 1
+				FROM source_feeds sf
+				WHERE sf.source_id = s.id
+					AND sf.status = 'active'
+			)
+		ORDER BY s.name ASC
+		LIMIT ${limit}
+	`);
+
+	const results: FeedProbeResult[] = [];
+	for (const source of rows) {
+		const result = await probeSourceFeed(source);
+		results.push(result);
+
+		if (result.feedUrl) {
+			await db.execute(sql`
+				INSERT INTO source_feeds (source_id, feed_url, status, last_error, updated_at)
+				VALUES (${source.id}, ${result.feedUrl}, 'active', NULL, now())
+				ON CONFLICT (feed_url) DO UPDATE SET
+					source_id = excluded.source_id,
+					status = 'active',
+					last_error = NULL,
+					updated_at = now()
+			`);
+			await db.execute(sql`
+				UPDATE sources
+				SET status = 'ingesting', status_note = NULL, updated_at = now()
+				WHERE id = ${source.id}
+			`);
+		} else {
+			await db.execute(sql`
+				UPDATE sources
+				SET
+					status = 'needs_adapter',
+					status_note = ${result.error ?? 'No RSS/Atom feed found at common endpoints.'},
+					updated_at = now()
+				WHERE id = ${source.id}
+					AND status IN ('needs_rss', 'pending')
+			`);
+		}
+	}
+
+	return {
+		checked: results.length,
+		found: results.filter((result) => result.feedUrl).length,
+		results
+	};
+}
+
+async function probeSourceFeed(source: { id: number; slug: string; name: string; domain: string }) {
+	let lastError: string | null = null;
+	for (const url of candidateFeedUrls(source.domain)) {
+		try {
+			const response = await fetch(url, {
+				headers: {
+					'user-agent': 'hirek.hu feed discovery (+https://hirek.hu)',
+					accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*'
+				},
+				signal: AbortSignal.timeout(8000)
+			});
+			if (!response.ok) {
+				lastError = `${url}: HTTP ${response.status}`;
+				continue;
+			}
+
+			const xml = await response.text();
+			const items = parseFeed(xml);
+			if (items.length > 0) {
+				return {
+					sourceId: source.id,
+					slug: source.slug,
+					name: source.name,
+					domain: source.domain,
+					feedUrl: url,
+					itemCount: items.length,
+					error: null
+				} satisfies FeedProbeResult;
+			}
+			lastError = `${url}: no feed items`;
+		} catch (error) {
+			lastError = `${url}: ${error instanceof Error ? error.message : String(error)}`;
+		}
+	}
+
+	return {
+		sourceId: source.id,
+		slug: source.slug,
+		name: source.name,
+		domain: source.domain,
+		feedUrl: null,
+		itemCount: 0,
+		error: lastError
+	} satisfies FeedProbeResult;
+}
+
+function candidateFeedUrls(domain: string) {
+	const hosts = Array.from(new Set([normalizeDomain(domain), `www.${normalizeDomain(domain)}`]));
+	const paths = [
+		'/rss',
+		'/rss/',
+		'/feed',
+		'/feed/',
+		'/rss.xml',
+		'/feed.xml',
+		'/atom.xml',
+		'/index.xml'
+	];
+	return hosts.flatMap((host) => paths.map((path) => `https://${host}${path}`));
 }
 
 function extractSources(html: string) {

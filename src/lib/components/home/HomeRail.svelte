@@ -8,7 +8,7 @@
 	}: {
 		topArticles: Article[];
 		savedArticles: Article[];
-		onBookmarkToggle: (id: number) => void;
+		onBookmarkToggle: (article: Article) => void;
 	} = $props();
 </script>
 
@@ -53,7 +53,7 @@
 						<button
 							type="button"
 							class="remove-bookmark-btn"
-							onclick={() => onBookmarkToggle(article.id)}
+							onclick={() => onBookmarkToggle(article)}
 							aria-label="Könyvjelző törlése"
 						>
 							<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">

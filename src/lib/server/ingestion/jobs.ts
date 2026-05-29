@@ -1,7 +1,7 @@
 import { asc, eq, sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { sourceFeeds } from '$lib/server/db/schema';
-import { discoverHirkeresoSources } from './source-discovery';
+import { discoverHirkeresoSources, discoverMissingSourceFeeds } from './source-discovery';
 import { ingestFeedById } from './feed-ingestion';
 import { reindexArticles } from './reindex';
 
@@ -10,7 +10,11 @@ const VISIBILITY_TIMEOUT_SECONDS = 90;
 const RETRY_DELAY_SECONDS = 300;
 const MAX_ATTEMPTS = 3;
 
-export type IngestionJobType = 'discover-hirkereso' | 'ingest-feed' | 'reindex-meili';
+export type IngestionJobType =
+	| 'discover-hirkereso'
+	| 'discover-source-feeds'
+	| 'ingest-feed'
+	| 'reindex-meili';
 
 type QueueMessage = {
 	type: IngestionJobType;
@@ -72,8 +76,10 @@ export async function runQueuedIngestionJobs(limit = 10) {
 			await archiveJob(job.msg_id);
 
 			if (attempts >= MAX_ATTEMPTS) {
+				await recordFeedFailure(message, errorMessage, true);
 				results.push({ id: job.msg_id, type: message.type, status: 'failed', error: errorMessage });
 			} else {
+				await recordFeedFailure(message, errorMessage, false);
 				await retryJob(message, attempts + 1);
 				results.push({ id: job.msg_id, type: message.type, status: 'error', error: errorMessage });
 			}
@@ -116,6 +122,21 @@ async function archiveJob(msgId: number) {
 	await db.execute(sql`SELECT pgmq.archive(queue_name => ${QUEUE_NAME}, msg_id => ${msgId})`);
 }
 
+async function recordFeedFailure(message: QueueMessage, errorMessage: string, finalAttempt: boolean) {
+	if (message.type !== 'ingest-feed') return;
+	const feedId = Number(message.payload.feedId);
+	if (!Number.isInteger(feedId)) return;
+
+	await db
+		.update(sourceFeeds)
+		.set({
+			status: finalAttempt ? 'error' : 'active',
+			lastError: errorMessage,
+			updatedAt: new Date()
+		})
+		.where(eq(sourceFeeds.id, feedId));
+}
+
 async function retryJob(message: QueueMessage, attempts: number) {
 	const retryMessage = {
 		...message,
@@ -127,15 +148,16 @@ async function retryJob(message: QueueMessage, attempts: number) {
 
 	await db.execute(sql`
 		SELECT pgmq.send(
-			queue_name => ${QUEUE_NAME},
-			msg => ${JSON.stringify(retryMessage)}::jsonb,
-			delay => ${RETRY_DELAY_SECONDS}
+			${QUEUE_NAME},
+			${JSON.stringify(retryMessage)}::jsonb,
+			${RETRY_DELAY_SECONDS}::integer
 		)
 	`);
 }
 
 async function runJob(type: IngestionJobType, payload: Record<string, unknown>) {
 	if (type === 'discover-hirkereso') return discoverHirkeresoSources();
+	if (type === 'discover-source-feeds') return discoverMissingSourceFeeds(Number(payload.limit) || 20);
 	if (type === 'reindex-meili') return reindexArticles();
 	if (type === 'ingest-feed') {
 		const feedId = Number(payload.feedId);

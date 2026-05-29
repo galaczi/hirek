@@ -17,12 +17,21 @@ export const sources = pgTable(
 		name: text('name').notNull(),
 		domain: text('domain').notNull(),
 		status: text('status').notNull().default('ingesting'),
+		statusNote: text('status_note'),
+		partnerPackage: text('partner_package').notNull().default('free'),
+		partnerStatus: text('partner_status').notNull().default('none'),
+		trafficTarget: integer('traffic_target').notNull().default(0),
+		utmSource: text('utm_source').notNull().default('hirek.hu'),
+		utmMedium: text('utm_medium').notNull().default('referral'),
+		utmCampaign: text('utm_campaign').notNull().default('hirek_stream'),
 		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 		updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
 	},
 	(table) => ({
 		slugIdx: uniqueIndex('sources_slug_idx').on(table.slug),
-		domainIdx: index('sources_domain_idx').on(table.domain)
+		domainIdx: index('sources_domain_idx').on(table.domain),
+		statusIdx: index('sources_status_idx').on(table.status),
+		partnerStatusIdx: index('sources_partner_status_idx').on(table.partnerStatus)
 	})
 );
 
@@ -260,14 +269,52 @@ export const clickEvents = pgTable(
 		sourceId: integer('source_id')
 			.notNull()
 			.references(() => sources.id, { onDelete: 'cascade' }),
+		categoryId: integer('category_id').references(() => categories.id, { onDelete: 'set null' }),
 		referrer: text('referrer'),
 		userAgent: text('user_agent'),
 		ipHash: text('ip_hash'),
+		utmCampaign: text('utm_campaign').notNull().default('hirek_stream'),
+		utmContent: text('utm_content'),
+		isBot: boolean('is_bot').notNull().default(false),
+		botName: text('bot_name'),
+		isUnique: boolean('is_unique').notNull().default(true),
 		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
 	},
 	(table) => ({
 		articleIdx: index('click_events_article_idx').on(table.articleId),
 		sourceIdx: index('click_events_source_idx').on(table.sourceId),
+		categoryIdx: index('click_events_category_idx').on(table.categoryId),
+		campaignIdx: index('click_events_campaign_idx').on(table.utmCampaign),
+		botIdx: index('click_events_bot_idx').on(table.isBot),
+		uniqueIdx: index('click_events_unique_idx').on(table.isUnique),
 		createdAtIdx: index('click_events_created_at_idx').on(table.createdAt)
+	})
+);
+
+export const impressionEvents = pgTable(
+	'impression_events',
+	{
+		id: serial('id').primaryKey(),
+		articleId: integer('article_id')
+			.notNull()
+			.references(() => articles.id, { onDelete: 'cascade' }),
+		sourceId: integer('source_id')
+			.notNull()
+			.references(() => sources.id, { onDelete: 'cascade' }),
+		categoryId: integer('category_id').references(() => categories.id, { onDelete: 'set null' }),
+		pagePath: text('page_path'),
+		referrer: text('referrer'),
+		userAgent: text('user_agent'),
+		ipHash: text('ip_hash'),
+		isBot: boolean('is_bot').notNull().default(false),
+		botName: text('bot_name'),
+		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
+	},
+	(table) => ({
+		articleIdx: index('impression_events_article_idx').on(table.articleId),
+		sourceIdx: index('impression_events_source_idx').on(table.sourceId),
+		categoryIdx: index('impression_events_category_idx').on(table.categoryId),
+		createdAtIdx: index('impression_events_created_at_idx').on(table.createdAt),
+		botIdx: index('impression_events_bot_idx').on(table.isBot)
 	})
 );

@@ -1,7 +1,9 @@
+import { error, redirect } from '@sveltejs/kit';
 import { sql } from 'drizzle-orm';
-import type { PageServerLoad } from './$types';
+import type { LayoutServerLoad } from './$types';
 import { db } from '$lib/server/db';
 import type { Article, Category, Publisher } from '$lib/home/data';
+import { getCategoryBySlug, getSourceBySlug } from '$lib/server/articles/list';
 import { searchArticles } from '$lib/server/search';
 import type { SearchFilters, SearchResponse, SearchResult } from '$lib/server/search/types';
 
@@ -22,6 +24,7 @@ type CategoryRow = Category & {
 };
 
 type SourceRow = Publisher;
+
 type HomeFilters = {
 	category?: string;
 	source?: string;
@@ -32,9 +35,13 @@ const fallbackCategories: Category[] = [{ slug: 'all', name: 'Összes hír' }];
 const timeFilters = new Set(['4h', '12h', '24h']);
 const HOMEPAGE_LOAD_ERROR = 'A hírek betöltése most nem sikerült. Kérlek, próbáld újra pár pillanat múlva.';
 
-export const load: PageServerLoad = async ({ url }) => {
+export const load: LayoutServerLoad = async ({ params, url }) => {
+	redirectLegacyHomeFilters(url);
+
 	const q = url.searchParams.get('q')?.trim() ?? '';
-	const filters = parseFilters(url);
+	const routeFilters = await getRouteFilters(params, url);
+	const filters = { ...parseQueryFilters(url), ...routeFilters };
+	const canonicalPath = buildHomePath(filters);
 	const todayLabel = new Intl.DateTimeFormat('hu-HU', {
 		year: 'numeric',
 		month: 'long',
@@ -75,10 +82,11 @@ export const load: PageServerLoad = async ({ url }) => {
 			activeCategory: filters.category ?? 'all',
 			activePublisher: filters.source ?? 'all',
 			activeTimeFilter: filters.time ?? 'all',
+			canonicalPath,
 			loadError: null
 		};
-	} catch (error) {
-		console.error('Homepage load failed:', error);
+	} catch (loadError) {
+		console.error('Homepage load failed:', loadError);
 
 		return {
 			todayLabel,
@@ -94,10 +102,65 @@ export const load: PageServerLoad = async ({ url }) => {
 			activeCategory: filters.category ?? 'all',
 			activePublisher: filters.source ?? 'all',
 			activeTimeFilter: filters.time ?? 'all',
+			canonicalPath,
 			loadError: HOMEPAGE_LOAD_ERROR
 		};
 	}
 };
+
+async function getRouteFilters(params: Partial<Record<string, string>>, url: URL): Promise<HomeFilters> {
+	if (url.pathname.startsWith('/rovat/')) {
+		const category = await getCategoryBySlug(params.category ?? '');
+		if (!category) error(404, 'Rovat nem található');
+		return { category: category.slug };
+	}
+
+	if (params.source) {
+		const source = await getSourceBySlug(params.source);
+		if (!source) error(404, 'Forrás nem található');
+
+		if (!params.category) return { source: source.slug };
+
+		const category = await getCategoryBySlug(params.category);
+		if (!category) error(404, 'Rovat nem található');
+		return { source: source.slug, category: category.slug };
+	}
+
+	return {};
+}
+
+function redirectLegacyHomeFilters(url: URL) {
+	const source = cleanFilter(url.searchParams.get('source'));
+	const category = cleanFilter(url.searchParams.get('category'));
+	if (!source && !category) return;
+
+	const params = new URLSearchParams(url.searchParams);
+	params.delete('source');
+	params.delete('category');
+	const query = params.toString();
+	redirect(308, `${buildHomePath({ source, category })}${query ? `?${query}` : ''}`);
+}
+
+function buildHomePath(filters: Pick<HomeFilters, 'category' | 'source'>) {
+	if (filters.source && filters.category) return `/${filters.source}/${filters.category}/`;
+	if (filters.source) return `/${filters.source}/`;
+	if (filters.category) return `/rovat/${filters.category}/`;
+	return '/';
+}
+
+function parseQueryFilters(url: URL): HomeFilters {
+	const rawTime = url.searchParams.get('time');
+	const time = timeFilters.has(rawTime ?? '')
+		? (rawTime as HomeFilters['time'])
+		: undefined;
+
+	return { time };
+}
+
+function cleanFilter(value: string | null) {
+	const clean = value?.trim();
+	return clean && clean !== 'all' ? clean : undefined;
+}
 
 async function getArticles(orderBy: string, limit: number, filters: HomeFilters = {}) {
 	const where = [sql`a.active = true`];
@@ -139,22 +202,6 @@ async function getArticles(orderBy: string, limit: number, filters: HomeFilters 
 		ORDER BY ${sql.raw(orderBy)}
 		LIMIT ${limit}
 	`);
-}
-
-function parseFilters(url: URL): HomeFilters {
-	const category = cleanFilter(url.searchParams.get('category'));
-	const source = cleanFilter(url.searchParams.get('source'));
-	const rawTime = url.searchParams.get('time');
-	const time = timeFilters.has(rawTime ?? '')
-		? (rawTime as HomeFilters['time'])
-		: undefined;
-
-	return { category, source, time };
-}
-
-function cleanFilter(value: string | null) {
-	const clean = value?.trim();
-	return clean && clean !== 'all' ? clean : undefined;
 }
 
 function getTimeBoundary(time: HomeFilters['time']) {

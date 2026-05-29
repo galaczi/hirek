@@ -4,13 +4,15 @@
 		todayLabel,
 		activeCategory = 'all',
 		activePublisher = 'all',
-		activeTimeFilter = 'all'
+		activeTimeFilter = 'all',
+		searchActionPath = '/'
 	}: {
 		searchQuery: string;
 		todayLabel: string;
 		activeCategory?: string;
 		activePublisher?: string;
 		activeTimeFilter?: string;
+		searchActionPath?: string;
 	} = $props();
 
 	type Suggestion = {
@@ -107,12 +109,18 @@
 
 <header class="site-header">
 	<div class="header-content">
-		<a class="logo-section" href="/" target="_blank" rel="noopener" aria-label="hirek.hu főoldal">
+		<a class="logo-section" href="/" aria-label="hirek.hu főoldal">
 			<div class="logo-icon">H</div>
 			<div class="logo-text">hírek<span>.hu</span><span class="logo-badge">live</span></div>
 		</a>
 
-		<form class="search-container" action="/" method="GET" aria-label="Hírek keresése">
+		<nav class="header-nav" aria-label="Fő navigáció">
+			<a href="/">Főoldal</a>
+			<a href="/konyvjelzok/">Könyvjelzők</a>
+			<a href="/top/">Top50</a>
+		</nav>
+
+		<form class="search-container" action={searchActionPath} method="GET" aria-label="Hírek keresése">
 			<svg
 				xmlns="http://www.w3.org/2000/svg"
 				fill="none"
@@ -140,12 +148,6 @@
 				}}
 				onblur={closeSuggestionsSoon}
 			/>
-			{#if activeCategory !== 'all'}
-				<input type="hidden" name="category" value={activeCategory} />
-			{/if}
-			{#if activePublisher !== 'all'}
-				<input type="hidden" name="source" value={activePublisher} />
-			{/if}
 			{#if activeTimeFilter !== 'all'}
 				<input type="hidden" name="time" value={activeTimeFilter} />
 			{/if}

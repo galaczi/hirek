@@ -43,6 +43,34 @@
       "when": 1780004525000,
       "tag": "0005_better_auth",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1780004526000,
+      "tag": "0006_source_admin_health",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1780004527000,
+      "tag": "0007_click_tracking_attribution",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1780004528000,
+      "tag": "0008_impression_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1780004529000,
+      "tag": "0009_source_utm_settings",
+      "breakpoints": true
     }
   ]
 }

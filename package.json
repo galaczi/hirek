@@ -17,9 +17,10 @@
 		"db:migrate": "drizzle-kit migrate",
 		"db:studio": "drizzle-kit studio",
 		"auth:user": "node --experimental-strip-types scripts/create-auth-user.ts",
-		"infra:up": "docker compose up -d postgres meilisearch worker",
+		"auth:demo": "node --experimental-strip-types scripts/seed-demo-users.ts",
+		"infra:up": "docker compose up -d postgres meilisearch app worker",
 		"infra:down": "docker compose down",
-		"infra:logs": "docker compose logs -f postgres meilisearch"
+		"infra:logs": "docker compose logs -f postgres meilisearch app worker"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-auto": "^7.0.1",

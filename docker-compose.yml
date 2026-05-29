@@ -43,6 +43,29 @@ services:
       timeout: 5s
       retries: 20
 
+  app:
+    image: node:22-bookworm-slim
+    container_name: hirek-app
+    restart: unless-stopped
+    working_dir: /app
+    command: npm run dev -- --host 0.0.0.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-hirek}:${POSTGRES_PASSWORD:-hirek}@postgres:5432/${POSTGRES_DB:-hirek}
+      MEILI_HOST: http://meilisearch:7700
+      MEILI_API_KEY: ${MEILI_API_KEY:-hirek_dev_master_key}
+      MEILI_ARTICLES_INDEX: ${MEILI_ARTICLES_INDEX:-articles}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:${APP_PORT:-5173}}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-hirek_dev_secret_change_me}
+    ports:
+      - "${APP_PORT:-5173}:5173"
+    volumes:
+      - .:/app
+
   worker:
     image: node:22-bookworm-slim
     container_name: hirek-worker
