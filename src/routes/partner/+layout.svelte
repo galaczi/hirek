@@ -1,26 +1,33 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import InternalShellHeader from '$lib/components/internal/InternalShellHeader.svelte';
 	import type { LayoutProps } from './$types';
 
 	let { data, children }: LayoutProps = $props();
 
 	const csvExportHref = $derived(`/partner/clicks.csv${page.url.search}`);
+	const navItems = $derived([
+		{ href: '/partner/', label: 'Áttekintés', active: page.url.pathname === '/partner/' },
+		{ href: csvExportHref, label: 'CSV export' },
+		...(data.isAdmin ? [{ href: '/admin/', label: 'Admin' }] : [])
+	]);
 </script>
 
-<main class="app-container admin-page">
-	<header class="admin-shell-header">
-		<div>
-			<p class="section-kicker">Partner</p>
-			<h1>Partner portál</h1>
-		</div>
-		<nav class="admin-shell-nav" aria-label="Partner navigáció">
-			<a href="/partner/" class="active">Áttekintés</a>
-			<a href={csvExportHref}>CSV export</a>
-			{#if data.isAdmin}
-				<a href="/admin/">Admin</a>
-			{/if}
-		</nav>
-	</header>
+<main class="app-container partner-page internal-shell">
+	<InternalShellHeader
+		section="Partner"
+		title="Partner portál"
+		subtitle="Kattintás- és hírcsatorna analitika, UTM követőkódok és kategória-szabályok kezelése."
+		navItems={navItems}
+	/>
 
 	{@render children()}
 </main>
+
+<style>
+	.partner-page {
+		display: grid;
+		gap: 1.5rem;
+		margin-top: 1.5rem;
+	}
+</style>

@@ -1,6 +1,10 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import type { PageProps } from './$types';
+	import InternalSectionHeader from '$lib/components/internal/InternalSectionHeader.svelte';
+	import InternalMetricCard from '$lib/components/internal/InternalMetricCard.svelte';
+	import StatusBadge from '$lib/components/internal/StatusBadge.svelte';
+	import InternalEmptyState from '$lib/components/internal/InternalEmptyState.svelte';
 
 	let { data }: PageProps = $props();
 
@@ -11,9 +15,9 @@
 		rejected: 'Elutasított'
 	};
 	const partnerPackageLabels: Record<string, string> = {
-		free: 'Ingyenes',
-		partner: 'Partner',
-		growth: 'Növekedési'
+		free: 'Ingyenes csomag',
+		partner: 'Partner csomag',
+		growth: 'Növekedési csomag'
 	};
 	const csvExportHref = $derived(buildPartnerHref('/partner/clicks.csv', data.reportDays));
 	const clicksOverTimeMax = $derived(
@@ -76,10 +80,12 @@
 </svelte:head>
 
 <section class="panel partner-report-toolbar">
-	<div>
-		<p class="section-kicker">Riport</p>
-		<h2 class="panel-title">Partner analitika</h2>
-	</div>
+	<InternalSectionHeader
+		kicker="Riport és elemzés"
+		title="Partner analitika"
+		subtitle="Kövesd nyomon a cikkek elérését, a látogatók kattintásait és a hírcsatorna állapotát."
+	/>
+	
 	<div class="partner-report-actions">
 		<div class="range-tabs" aria-label="Riport időszak">
 			{#each data.reportRanges as range (range)}
@@ -93,295 +99,858 @@
 			{/each}
 		</div>
 		{#if !isAdminSourcePicker}
-			<a class="load-more-btn" href={csvExportHref}>CSV export</a>
+			<a class="export-button" href={csvExportHref}>CSV riport letöltése</a>
 		{/if}
 	</div>
 </section>
 
 {#if isAdminSourcePicker}
-	<section class="panel">
-		<div class="panel-heading-row">
-			<div>
-				<p class="section-kicker">Admin nézet</p>
-				<h2 class="panel-title">Partnerforrás kiválasztása</h2>
-				<p class="panel-subtitle">
-					A partner portál egyetlen forrás adatait mutatja. Válassz forrást a riportokhoz és
-					a kategóriaszabályokhoz.
-				</p>
-			</div>
-			<span>{data.availableSources.length} forrás</span>
-		</div>
+	<section class="panel picker-panel">
+		<InternalSectionHeader
+			title="Partnerforrás kiválasztása"
+			subtitle="Válassz egy forrást az alábbiak közül, hogy megtekinthesd a hozzá tartozó partner riportokat, UTM beállításokat és kategorizálási szabályokat."
+		/>
+		
 		<div class="partner-source-grid">
 			{#each data.availableSources as source (source.id)}
-				<a href={sourcePickerHref(source.id)}>
-					<div>
-						<strong>{source.name}</strong>
-						<span>{source.domain}</span>
+				<a class="partner-source-card" href={sourcePickerHref(source.id)}>
+					<div class="source-card-header">
+						<strong class="source-card-title">{source.name}</strong>
+						<span class="source-card-domain">{source.domain}</span>
 					</div>
-						<div class="partner-source-metrics">
-							<span>{source.clickCount} kattintás</span>
-							<span>{source.articleCount} cikk</span>
-						</div>
-						<small>
-							{approvalStatusLabels[source.approvalStatus] ?? source.approvalStatus} ·
-							{partnerPackageLabels[source.partnerPackage] ?? source.partnerPackage}
-						</small>
-					</a>
-				{:else}
-				<div class="empty-state compact-empty">
-					<strong>Nincs forrás.</strong>
-					<span>Először az admin forráskezelőben hozz létre partnerforrást.</span>
-				</div>
+					
+					<div class="partner-source-metrics">
+						<span><strong>{source.clickCount}</strong> kattintás</span>
+						<span><strong>{source.articleCount}</strong> cikk</span>
+					</div>
+					
+					<div class="card-footer-badges">
+						<StatusBadge
+							label={approvalStatusLabels[source.approvalStatus] ?? source.approvalStatus}
+							tone={source.approvalStatus === 'approved' ? 'success' : source.approvalStatus === 'rejected' ? 'danger' : 'warning'}
+						/>
+						<StatusBadge
+							label={partnerPackageLabels[source.partnerPackage] ?? source.partnerPackage}
+							tone="accent"
+						/>
+					</div>
+				</a>
+			{:else}
+				<InternalEmptyState
+					title="Nincs partnerforrás"
+					description="Először a központi adminisztrációs felületen jelölj ki egy forrást partner csomaggal."
+					tone="warning"
+				/>
 			{/each}
 		</div>
 	</section>
 {:else if data.sourceState && !data.sourceState.isApproved}
-<section class="panel">
-	<div class="panel-heading-row">
-		<div>
-			<p class="section-kicker">Forrás állapot</p>
-			<h2 class="panel-title">{data.sourceState.sourceName}</h2>
-			<p class="panel-subtitle">{data.sourceState.sourceDomain}</p>
+	<section class="panel pending-approval-panel">
+		<InternalSectionHeader
+			kicker="Jóváhagyásra vár"
+			title={data.sourceState.sourceName}
+			subtitle={data.sourceState.sourceDomain}
+		/>
+		
+		<div class="pending-metrics-grid">
+			<InternalMetricCard label="Jóváhagyás" value={approvalStatusLabels[data.sourceState.approvalStatus] ?? data.sourceState.approvalStatus} tone="warning" />
+			<InternalMetricCard label="Partner csomag" value={partnerPackageLabels[data.sourceState.partnerPackage] ?? data.sourceState.partnerPackage} tone="accent" />
+			<InternalMetricCard label="Működési státusz" value={data.sourceState.status} tone="neutral" />
 		</div>
-		<div class="top-meta">
-			<span>{approvalStatusLabels[data.sourceState.approvalStatus] ?? data.sourceState.approvalStatus}</span>
-			<span>{partnerPackageLabels[data.sourceState.partnerPackage] ?? data.sourceState.partnerPackage}</span>
-		</div>
-	</div>
-	<div class="metric-list">
-		<div class="metric-row"><span>Jóváhagyás</span><strong>{approvalStatusLabels[data.sourceState.approvalStatus] ?? data.sourceState.approvalStatus}</strong></div>
-		<div class="metric-row"><span>Csomag</span><strong>{partnerPackageLabels[data.sourceState.partnerPackage] ?? data.sourceState.partnerPackage}</strong></div>
-		<div class="metric-row"><span>Működési státusz</span><strong>{data.sourceState.status}</strong></div>
-	</div>
-	<p class="form-hint">
-		{data.sourceState.statusNote ??
-			'A forrás még nem jóváhagyott, ezért az analitika és a konfiguráció később válik elérhetővé.'}
-	</p>
-</section>
-{:else}
-<section class="panel">
-	<h2 class="panel-title">Forrás</h2>
-	<div class="admin-table">
-		<div class="admin-row admin-row-head">
-			<span>Forrás</span><span>Domain</span><span>Cikkek</span><span>Emberi kattintás</span><span>Egyedi</span><span>Bot/nyers</span>
-		</div>
-		{#each data.sourceStats as source (source.sourceId)}
-			<div class="admin-row">
-				<span>{source.sourceName}</span>
-				<span>{source.sourceDomain}</span>
-				<span>{source.articleCount}</span>
-				<span>{source.clickCount}</span>
-				<span>{source.uniqueClickCount}</span>
-				<span>{source.botClickCount}/{source.rawClickCount}</span>
-			</div>
-		{/each}
-	</div>
-	{#if data.sourceState}
-		<p class="form-hint">
-			{approvalStatusLabels[data.sourceState.approvalStatus] ?? data.sourceState.approvalStatus}
-			·
-			{partnerPackageLabels[data.sourceState.partnerPackage] ?? data.sourceState.partnerPackage}
+		
+		<p class="config-warning">
+			ℹ️ {data.sourceState.statusNote ?? 'A forrás jelenleg még ellenőrzés alatt áll. Az analitika és a feed beállítások a jóváhagyás után válnak elérhetővé.'}
 		</p>
-	{/if}
-</section>
-
-<section class="partner-analytics-grid">
-	<section class="panel">
-		<div class="panel-heading-row">
-			<div>
-				<p class="section-kicker">Kattintások</p>
-				<h2 class="panel-title">Elmúlt {data.reportDays} nap</h2>
-			</div>
-		</div>
-		<div class="partner-bar-list">
-			{#each data.clicksOverTime as day (day.day)}
-				<div class="partner-bar-row">
-					<span class="partner-bar-label">{day.label}</span>
-					<div class="partner-bar-track" aria-label={`${day.clickCount} kattintás`}>
-						<span class="partner-bar-fill" style={`width: ${barWidth(day.clickCount, clicksOverTimeMax)}`}></span>
-					</div>
-					<strong>{day.clickCount}</strong>
-					<small>{day.uniqueClickCount} egyedi</small>
-				</div>
+	</section>
+{:else}
+	<section class="panel totals-panel">
+		<InternalSectionHeader title="Összesített adatok" subtitle="Az aktuális időszakra vetített látogatottsági és tartalom-aggregációk." />
+		
+		<div class="partner-totals-grid">
+			{#each data.sourceStats as source (source.sourceId)}
+				<InternalMetricCard label="Cikkszám" value={source.articleCount} tone="neutral" />
+				<InternalMetricCard label="Emberi kattintás" value={source.clickCount} tone="success" />
+				<InternalMetricCard label="Egyedi látogatók" value={source.uniqueClickCount} tone="accent" />
+				<InternalMetricCard label="Robot / Nyers" value={`${source.botClickCount} / ${source.rawClickCount}`} tone="warning" />
 			{/each}
 		</div>
 	</section>
 
-	<section class="panel">
-		<div class="panel-heading-row">
-			<div>
-				<p class="section-kicker">Rovatok</p>
-				<h2 class="panel-title">Top kategóriák</h2>
-			</div>
-		</div>
-		<div class="partner-bar-list">
-			{#each data.topCategories as category (category.slug)}
-				<div class="partner-bar-row">
-					<span class="partner-bar-label">{category.name}</span>
-					<div class="partner-bar-track" aria-label={`${category.clickCount} kattintás`}>
-						<span class="partner-bar-fill" style={`width: ${barWidth(category.clickCount, topCategoriesMax)}`}></span>
-					</div>
-					<strong>{category.clickCount}</strong>
-					<small>{category.uniqueClickCount} egyedi</small>
-				</div>
-			{:else}
-				<div class="empty-state compact-empty">
-					<strong>Nincs még kategória adat.</strong>
-					<span>A kattintások után itt jelennek meg a legjobb rovatok.</span>
-				</div>
-			{/each}
-		</div>
-	</section>
-
-	<section class="panel">
-		<div class="panel-heading-row">
-			<div>
-				<p class="section-kicker">Forgalmi útvonal</p>
-				<h2 class="panel-title">Belső források</h2>
-			</div>
-		</div>
-		<div class="partner-bar-list">
-			{#each data.trafficSources as source (source.label)}
-				<div class="partner-bar-row">
-					<span class="partner-bar-label">{source.label}</span>
-					<div class="partner-bar-track" aria-label={`${source.clickCount} kattintás`}>
-						<span class="partner-bar-fill" style={`width: ${barWidth(source.clickCount, trafficSourcesMax)}`}></span>
-					</div>
-					<strong>{source.clickCount}</strong>
-					<small>{source.uniqueClickCount} egyedi</small>
-				</div>
-			{:else}
-				<div class="empty-state compact-empty">
-					<strong>Nincs még forgalmi adat.</strong>
-					<span>A belső oldalak kattintásai itt fognak látszani.</span>
-				</div>
-			{/each}
-		</div>
-	</section>
-</section>
-
-{#if data.partnerSourceId}
-	<section class="admin-grid">
-		<section class="panel">
-			<h2 class="panel-title">Hírcsatornák állapota</h2>
-			<div class="admin-table">
-				<div class="admin-row admin-row-head">
-					<span>Feed</span><span>Állapot</span><span>Utolsó frissítés</span><span>Hiba</span>
-				</div>
-				{#each data.feedHealth as feed (feed.feedId)}
-					<div class="admin-row">
-						<span>
-							<strong>{feed.sourceName}</strong><br />
-							<small>{feed.feedUrl}</small>
-						</span>
-						<span>{feedStatusLabel(feed.status)}</span>
-						<span>{formatOptionalDate(feed.lastFetchedAt)}</span>
-						<span>{feed.lastError ?? '-'}</span>
-					</div>
-				{/each}
-			</div>
-		</section>
-
-		{#if data.sourceSettings}
-			<form class="panel admin-form" method="POST" action={actionUrl('updateUtmSettings')}>
-				<h2 class="panel-title">UTM paraméterek</h2>
-				<p class="form-hint">{data.sourceSettings.sourceName} kimenő linkjeihez használt követőkódok.</p>
-				<label>
-					<span>utm_source</span>
-					<input name="utmSource" value={data.sourceSettings.utmSource} required />
-				</label>
-				<label>
-					<span>utm_medium</span>
-					<input name="utmMedium" value={data.sourceSettings.utmMedium} required />
-				</label>
-				<label>
-					<span>utm_campaign</span>
-					<input name="utmCampaign" value={data.sourceSettings.utmCampaign} required />
-				</label>
-				<button class="load-more-btn" type="submit">Beállítások mentése</button>
-			</form>
-		{/if}
-	</section>
-
-	<section class="admin-grid">
-		<form class="panel admin-form" method="POST" action={actionUrl('addUrlRule')}>
-			<h2 class="panel-title">URL kategóriaszabályok</h2>
-			<input name="urlPattern" placeholder="portfolio.hu/global/*" required />
-			<select name="categorySlug" required>
-				{#each data.categories as category (category.slug)}
-					<option value={category.slug}>{category.name}</option>
-				{/each}
-			</select>
-			<button class="load-more-btn" type="submit">Szabály mentése</button>
-		</form>
-
-		<section class="panel">
-			<h2 class="panel-title">Aktuális szabályok</h2>
-			<div class="admin-table">
-				<div class="admin-row admin-row-head"><span>Minta</span><span>Kategória</span><span></span></div>
-				{#each data.sourceRules as rule (rule.id)}
-					<div class="admin-row">
-						<span>{rule.urlPattern}</span>
-						<span>{rule.categoryName}</span>
-						<form method="POST" action={actionUrl('deleteUrlRule')}>
-							<input type="hidden" name="ruleId" value={rule.id} />
-							<button type="submit">Törlés</button>
-						</form>
-					</div>
-				{/each}
-			</div>
-		</section>
-	</section>
-{/if}
-
-<section class="admin-grid">
-	<div class="panel">
-		<h2 class="panel-title">Cikkenkénti analitika</h2>
-		<div class="top-news-list">
-			{#each data.topArticles as article (article.id)}
-				<div class="top-news-item">
-					<div class="top-content">
-						<a class="top-title" href={`/go/${article.id}`} target="_blank" rel="noopener">{article.title}</a>
-						<div class="top-meta">
-							<span>{article.sourceName}</span>
-							<span>{article.clickCount} emberi kattintás</span>
-							<span>{article.uniqueClickCount} egyedi</span>
-							<span>{article.botClickCount}/{article.rawClickCount} bot/nyers</span>
-							<span>{formatDate(article.publishedAt)}</span>
+	<section class="partner-analytics-grid">
+		<section class="panel chart-card">
+			<InternalSectionHeader kicker="Idősor" title={`Kattintások (Elmúlt ${data.reportDays} nap)`} />
+			<div class="partner-bar-list">
+				{#each data.clicksOverTime as day (day.day)}
+					<div class="partner-bar-row">
+						<span class="partner-bar-label">{day.label}</span>
+						<div class="partner-bar-track" aria-label={`${day.clickCount} kattintás`}>
+							<span class="partner-bar-fill" style={`width: ${barWidth(day.clickCount, clicksOverTimeMax)}`}></span>
 						</div>
-						<form class="inline-form" method="POST" action={actionUrl('overrideCategory')}>
+						<div class="partner-bar-values">
+							<strong>{day.clickCount}</strong>
+							<small>{day.uniqueClickCount} egyedi</small>
+						</div>
+					</div>
+				{/each}
+			</div>
+		</section>
+
+		<section class="panel chart-card">
+			<InternalSectionHeader kicker="Kategóriák" title="Népszerű rovatok" />
+			<div class="partner-bar-list">
+				{#each data.topCategories as category (category.slug)}
+					<div class="partner-bar-row">
+						<span class="partner-bar-label">{category.name}</span>
+						<div class="partner-bar-track" aria-label={`${category.clickCount} kattintás`}>
+							<span class="partner-bar-fill accent-fill" style={`width: ${barWidth(category.clickCount, topCategoriesMax)}`}></span>
+						</div>
+						<div class="partner-bar-values">
+							<strong>{category.clickCount}</strong>
+							<small>{category.uniqueClickCount} egyedi</small>
+						</div>
+					</div>
+				{:else}
+					<InternalEmptyState
+						title="Nincs kategória adat"
+						description="Még nem regisztráltunk kattintásokat a rovatokban ebben a riport-időszakban."
+						tone="neutral"
+						compact
+					/>
+				{/each}
+			</div>
+		</section>
+
+		<section class="panel chart-card">
+			<InternalSectionHeader kicker="Forgalom" title="Belső forgalmi csatornák" />
+			<div class="partner-bar-list">
+				{#each data.trafficSources as source (source.label)}
+					<div class="partner-bar-row">
+						<span class="partner-bar-label">{source.label}</span>
+						<div class="partner-bar-track" aria-label={`${source.clickCount} kattintás`}>
+							<span class="partner-bar-fill info-fill" style={`width: ${barWidth(source.clickCount, trafficSourcesMax)}`}></span>
+						</div>
+						<div class="partner-bar-values">
+							<strong>{source.clickCount}</strong>
+							<small>{source.uniqueClickCount} egyedi</small>
+						</div>
+					</div>
+				{:else}
+					<InternalEmptyState
+						title="Nincs forgalmi adat"
+						description="Ebben a riport-időszakban még nem érkezett látogató a belső forgalmi csatornákból."
+						tone="neutral"
+						compact
+					/>
+				{/each}
+			</div>
+		</section>
+	</section>
+
+	{#if data.partnerSourceId}
+		<section class="admin-grid integration-grid">
+			<section class="panel feeds-health-panel">
+				<InternalSectionHeader title="Hírcsatornák állapota" subtitle="RSS feedek lekérési adatai és egészsége." />
+				<div class="admin-table">
+					<div class="admin-row admin-row-head">
+						<span>Feed adatai</span>
+						<span>Állapot</span>
+						<span>Utolsó frissítés</span>
+						<span>Hibaüzenet</span>
+					</div>
+					{#each data.feedHealth as feed (feed.feedId)}
+						<div class="admin-row">
+							<span class="feed-info-cell">
+								<strong>{feed.sourceName}</strong>
+								<span class="feed-url-text">{feed.feedUrl}</span>
+							</span>
+							<div class="feed-status-cell">
+								<StatusBadge
+									label={feedStatusLabel(feed.status)}
+									tone={feed.status === 'active' ? 'success' : feed.status === 'error' ? 'danger' : 'muted'}
+								/>
+							</div>
+							<span class="feed-date-cell">{formatOptionalDate(feed.lastFetchedAt)}</span>
+							<span class="feed-error-cell" class:error-text={Boolean(feed.lastError)}>{feed.lastError ?? '-'}</span>
+						</div>
+					{/each}
+				</div>
+			</section>
+
+			{#if data.sourceSettings}
+				<form class="panel admin-form-card" method="POST" action={actionUrl('updateUtmSettings')}>
+					<InternalSectionHeader
+						title="UTM paraméterezés"
+						subtitle={`${data.sourceSettings.sourceName} kimenő linkjeihez csatolt UTM kampánykódok a Google Analytics követéshez.`}
+					/>
+					
+					<div class="form-fields">
+						<label>
+							<span>utm_source</span>
+							<input name="utmSource" value={data.sourceSettings.utmSource} required />
+						</label>
+						<label>
+							<span>utm_medium</span>
+							<input name="utmMedium" value={data.sourceSettings.utmMedium} required />
+						</label>
+						<label>
+							<span>utm_campaign</span>
+							<input name="utmCampaign" value={data.sourceSettings.utmCampaign} required />
+						</label>
+						<button class="save-button" type="submit">Beállítások mentése</button>
+					</div>
+				</form>
+			{/if}
+		</section>
+
+		<section class="admin-grid rules-grid">
+			<form class="panel admin-form-card" method="POST" action={actionUrl('addUrlRule')}>
+				<InternalSectionHeader title="Új URL kategóriaszabály" subtitle="Szabály hozzáadása az automatikus rovatba soroláshoz." />
+				<div class="form-fields">
+					<label>
+						<span>URL Minta</span>
+						<input name="urlPattern" placeholder="domain.hu/sport/*" required />
+					</label>
+					<label>
+						<span>Cél rovat</span>
+						<select name="categorySlug" required>
+							{#each data.categories as category (category.slug)}
+								<option value={category.slug}>{category.name}</option>
+							{/each}
+						</select>
+					</label>
+					<button class="save-button" type="submit">Szabály mentése</button>
+				</div>
+			</form>
+
+			<section class="panel current-rules-panel">
+				<InternalSectionHeader title="Aktuális szabályok" subtitle="Jelenlegi kategorizálási irányelvek a forráshoz." />
+				<div class="admin-table">
+					<div class="admin-row admin-row-head">
+						<span>Minta</span>
+						<span>Kategória</span>
+						<span>Művelet</span>
+					</div>
+					{#each data.sourceRules as rule (rule.id)}
+						<div class="admin-row rules-list-row">
+							<span class="rule-pattern">{rule.urlPattern}</span>
+							<span class="rule-category">{rule.categoryName}</span>
+							<form class="delete-form" method="POST" action={actionUrl('deleteUrlRule')}>
+								<input type="hidden" name="ruleId" value={rule.id} />
+								<button class="delete-btn" type="submit">Törlés</button>
+							</form>
+						</div>
+					{:else}
+						<InternalEmptyState
+							title="Nincsenek egyedi szabályok"
+							description="Ez a forrás nem rendelkezik egyedi URL szabályokkal."
+							tone="neutral"
+							compact
+						/>
+					{/each}
+				</div>
+			</section>
+		</section>
+	{/if}
+
+	<section class="admin-grid analytics-tables-grid">
+		<div class="panel list-panel">
+			<InternalSectionHeader title="Cikkenkénti kattintások" subtitle="A riport időszak legnépszerűbb cikkei és rovat felülbírálata." />
+			
+			<div class="articles-list">
+				{#each data.topArticles as article (article.id)}
+					<div class="article-analytics-row">
+						<div class="article-main-copy">
+							<a class="article-title" href={`/go/${article.id}`} target="_blank" rel="noopener">{article.title}</a>
+							<div class="article-metadata">
+								<span class="source-label">{article.sourceName}</span>
+								<span>·</span>
+								<span class="stats-label"><strong>{article.clickCount}</strong> kattintás (<strong>{article.uniqueClickCount}</strong> egyedi)</span>
+								<span>·</span>
+								<span class="bot-label">Robot: {article.botClickCount} / {article.rawClickCount}</span>
+								<span>·</span>
+								<span class="date-label">{formatDate(article.publishedAt)}</span>
+							</div>
+						</div>
+						
+						<form class="category-override-form" method="POST" action={actionUrl('overrideCategory')}>
 							<input type="hidden" name="articleId" value={article.id} />
 							<select name="categorySlug" aria-label="Kategória felülírása">
 								{#each data.categories as category (category.slug)}
 									<option value={category.slug}>{category.name}</option>
 								{/each}
 							</select>
-							<button type="submit">Mentés</button>
+							<button class="override-save-btn" type="submit">Mentés</button>
 						</form>
 					</div>
-				</div>
-			{/each}
+				{/each}
+			</div>
 		</div>
-	</div>
 
-	<div class="panel">
-		<h2 class="panel-title">Legutóbbi kattintások</h2>
-		<div class="top-news-list">
-			{#each data.recentClicks as click (click.id)}
-				<div class="top-news-item">
-					<div class="top-content">
-						<div class="top-title">{click.articleTitle}</div>
-						<div class="top-meta">
-							<span>{click.sourceName}</span>
-							<span>{formatDate(click.createdAt)}</span>
-							<span>{click.isBot ? (click.botName ?? 'robot') : click.isUnique ? 'egyedi emberi' : 'ismételt emberi'}</span>
-							<span>{click.utmCampaign}</span>
-							<span>{click.referrer ?? 'közvetlen'}</span>
+		<div class="panel list-panel">
+			<InternalSectionHeader title="Legutóbbi kattintások" subtitle="Valós idejű látogatói eseménynapló." />
+			
+			<div class="clicks-log-list">
+				{#each data.recentClicks as click (click.id)}
+					<div class="click-event-row">
+						<div class="click-title">{click.articleTitle}</div>
+						<div class="click-meta">
+							<span class="click-source">{click.sourceName}</span>
+							<span>·</span>
+							<span class="click-time">{formatDate(click.createdAt)}</span>
+							<span>·</span>
+							<span class="click-type" class:is-bot={click.isBot} class:is-unique={click.isUnique && !click.isBot}>
+								{click.isBot ? (click.botName ?? 'robot') : click.isUnique ? 'egyedi látogató' : 'visszatérő látogató'}
+							</span>
+							{#if click.utmCampaign}
+								<span>·</span>
+								<span class="click-utm">{click.utmCampaign}</span>
+							{/if}
+							<span>·</span>
+							<span class="click-ref">{click.referrer ?? 'közvetlen belépés'}</span>
 						</div>
 					</div>
-				</div>
-			{/each}
+				{/each}
+			</div>
 		</div>
-	</div>
-</section>
+	</section>
 {/if}
+
+<style>
+	.partner-report-toolbar {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 1.5rem;
+		margin-bottom: 1.5rem;
+	}
+	.partner-report-actions {
+		display: flex;
+		align-items: center;
+		gap: 1rem;
+		flex-wrap: wrap;
+	}
+
+	.range-tabs {
+		display: flex;
+		background: var(--bg-alt);
+		padding: 0.25rem;
+		border-radius: var(--radius-md);
+		border: 1px solid var(--border);
+	}
+	.range-tabs a {
+		font-family: var(--font-body);
+		font-size: 0.8125rem;
+		font-weight: 700;
+		color: var(--text-muted);
+		padding: 0.375rem 0.875rem;
+		border-radius: var(--radius-sm);
+		text-decoration: none;
+		transition: var(--transition);
+	}
+	.range-tabs a.active {
+		background: var(--bg-card);
+		color: var(--primary);
+		box-shadow: var(--shadow-sm);
+	}
+	.export-button {
+		font-family: var(--font-body);
+		font-size: 0.8125rem;
+		font-weight: 700;
+		color: white;
+		background: linear-gradient(135deg, var(--text-main), hsl(215, 24%, 27%));
+		border-radius: var(--radius-md);
+		padding: 0.5rem 1rem;
+		text-decoration: none;
+		box-shadow: var(--shadow-sm);
+		transition: var(--transition);
+	}
+	.export-button:hover {
+		transform: translateY(-1px);
+		box-shadow: var(--shadow-md);
+	}
+
+	.picker-panel {
+		margin-bottom: 1.5rem;
+	}
+	.partner-source-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+		gap: 1rem;
+		margin-top: 1.25rem;
+	}
+	.partner-source-card {
+		display: grid;
+		gap: 1rem;
+		padding: 1.25rem;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-lg);
+		background: var(--bg-card);
+		text-decoration: none;
+		color: var(--text-main);
+		transition: var(--transition);
+	}
+	.partner-source-card:hover {
+		border-color: var(--border-focus);
+		transform: translateY(-2px);
+		box-shadow: var(--shadow-md);
+	}
+	.source-card-header {
+		display: grid;
+		gap: 0.125rem;
+	}
+	.source-card-title {
+		font-family: var(--font-display);
+		font-size: 1.125rem;
+		font-weight: 800;
+	}
+	.source-card-domain {
+		font-size: 0.75rem;
+		color: var(--text-muted);
+	}
+	.partner-source-metrics {
+		display: flex;
+		gap: 1rem;
+		font-size: 0.8125rem;
+		color: var(--text-muted);
+		background: var(--bg-base);
+		padding: 0.5rem 0.75rem;
+		border-radius: var(--radius-md);
+	}
+	.partner-source-metrics strong {
+		color: var(--text-main);
+		font-family: var(--font-display);
+	}
+	.card-footer-badges {
+		display: flex;
+		gap: 0.375rem;
+	}
+
+	.pending-approval-panel {
+		margin-bottom: 1.5rem;
+	}
+	.pending-metrics-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+		gap: 0.875rem;
+		margin-top: 1.25rem;
+		margin-bottom: 1.25rem;
+	}
+	.config-warning {
+		font-size: 0.8125rem;
+		color: #92400e;
+		background: #fffbeb;
+		border: 1px solid #fde68a;
+		padding: 0.75rem 1rem;
+		border-radius: var(--radius-md);
+	}
+
+	.totals-panel {
+		margin-bottom: 1.5rem;
+	}
+	.partner-totals-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+		gap: 0.875rem;
+		margin-top: 1.25rem;
+	}
+
+	.partner-analytics-grid {
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		gap: 1.5rem;
+		margin-bottom: 1.5rem;
+	}
+	@media (max-width: 1024px) {
+		.partner-analytics-grid {
+			grid-template-columns: 1fr;
+		}
+	}
+	.chart-card {
+		display: flex;
+		flex-direction: column;
+		gap: 1.125rem;
+	}
+	.partner-bar-list {
+		display: grid;
+		gap: 0.75rem;
+		flex: 1;
+	}
+	.partner-bar-row {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+	}
+	.partner-bar-label {
+		font-size: 0.75rem;
+		font-weight: 700;
+		color: var(--text-muted);
+		width: 5.5rem;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.partner-bar-track {
+		flex: 1;
+		height: 0.5rem;
+		background: var(--bg-alt);
+		border-radius: var(--radius-pill);
+		overflow: hidden;
+	}
+	.partner-bar-fill {
+		display: block;
+		height: 100%;
+		background: linear-gradient(90deg, var(--primary), var(--secondary));
+		border-radius: var(--radius-pill);
+		transition: width 0.3s ease-in-out;
+	}
+	.partner-bar-fill.accent-fill {
+		background: linear-gradient(90deg, hsl(270, 70%, 45%), hsl(290, 75%, 55%));
+	}
+	.partner-bar-fill.info-fill {
+		background: linear-gradient(90deg, var(--info), hsl(198, 93%, 41%));
+	}
+	.partner-bar-values {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-end;
+		width: 4rem;
+		line-height: 1.2;
+	}
+	.partner-bar-values strong {
+		font-family: var(--font-display);
+		font-size: 0.8125rem;
+		color: var(--text-main);
+	}
+	.partner-bar-values small {
+		font-size: 0.625rem;
+		color: var(--text-light);
+		white-space: nowrap;
+	}
+
+	.integration-grid, .rules-grid {
+		display: grid;
+		grid-template-columns: 2.2fr 1fr;
+		gap: 1.5rem;
+		margin-bottom: 1.5rem;
+	}
+	@media (max-width: 1024px) {
+		.integration-grid, .rules-grid {
+			grid-template-columns: 1fr;
+		}
+	}
+
+	.feeds-health-panel, .current-rules-panel {
+		overflow: hidden;
+	}
+
+	.admin-table {
+		display: grid;
+		gap: 0.5rem;
+		margin-top: 1.125rem;
+	}
+	.admin-row {
+		display: grid;
+		grid-template-columns: 2fr 100px 1.5fr 3fr;
+		gap: 1rem;
+		align-items: center;
+		padding: 0.625rem 1rem;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-md);
+		background: var(--bg-card);
+	}
+	.rules-list-row {
+		grid-template-columns: 3fr 2fr 80px;
+	}
+	.admin-row-head {
+		font-size: 0.6875rem;
+		font-weight: 800;
+		color: var(--text-light);
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		border: none;
+		background: transparent;
+		padding-bottom: 0.25rem;
+	}
+	
+	.feed-info-cell {
+		display: grid;
+		gap: 0.125rem;
+	}
+	.feed-url-text {
+		font-size: 0.75rem;
+		color: var(--text-light);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		max-width: 15rem;
+	}
+	.feed-date-cell {
+		font-size: 0.75rem;
+		color: var(--text-muted);
+	}
+	.feed-error-cell {
+		font-size: 0.75rem;
+		color: var(--text-muted);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.feed-error-cell.error-text {
+		color: #b42318;
+		font-weight: 550;
+	}
+
+	.rule-pattern {
+		font-family: monospace;
+		font-size: 0.75rem;
+		font-weight: 700;
+		color: var(--text-main);
+	}
+	.rule-category {
+		font-size: 0.8125rem;
+		font-weight: 700;
+		color: var(--primary);
+	}
+	.delete-form {
+		width: 100%;
+	}
+	.delete-btn {
+		font-family: var(--font-body);
+		font-size: 0.75rem;
+		font-weight: 700;
+		color: #b42318;
+		background: #fef2f2;
+		border: 1px solid rgba(220, 38, 38, 0.15);
+		border-radius: var(--radius-md);
+		padding: 0.375rem;
+		transition: var(--transition);
+		width: 100%;
+	}
+	.delete-btn:hover {
+		background: #b42318;
+		color: white;
+	}
+
+	/* Form layouts */
+	.admin-form-card {
+		display: grid;
+		gap: 1rem;
+		align-content: start;
+	}
+	.form-fields {
+		display: grid;
+		gap: 0.875rem;
+	}
+	label {
+		display: grid;
+		gap: 0.25rem;
+	}
+	label span {
+		font-size: 0.6875rem;
+		font-weight: 800;
+		color: var(--text-muted);
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
+	input, select {
+		font-family: var(--font-body);
+		font-size: 0.8125rem;
+		color: var(--text-main);
+		background: var(--bg-alt);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-md);
+		padding: 0.5rem 0.75rem;
+		outline: none;
+		transition: var(--transition);
+		width: 100%;
+	}
+	input:focus, select:focus {
+		background: var(--bg-card);
+		border-color: var(--border-focus);
+		box-shadow: 0 0 0 2px rgba(255, 78, 58, 0.12);
+	}
+	.save-button {
+		font-family: var(--font-body);
+		font-size: 0.8125rem;
+		font-weight: 700;
+		color: white;
+		background: linear-gradient(135deg, var(--primary), var(--secondary));
+		border-radius: var(--radius-md);
+		padding: 0.5rem 1rem;
+		box-shadow: 0 2px 6px rgba(255, 78, 58, 0.15);
+		transition: var(--transition);
+		width: fit-content;
+		cursor: pointer;
+	}
+	.save-button:hover {
+		transform: translateY(-1px);
+		box-shadow: 0 4px 12px rgba(255, 78, 58, 0.25);
+	}
+
+	.analytics-tables-grid {
+		display: grid;
+		grid-template-columns: 1.2fr 1fr;
+		gap: 1.5rem;
+		margin-top: 1.5rem;
+	}
+	@media (max-width: 1024px) {
+		.analytics-tables-grid {
+			grid-template-columns: 1fr;
+		}
+	}
+	.list-panel {
+		display: flex;
+		flex-direction: column;
+		gap: 1.125rem;
+	}
+
+	/* Articles list */
+	.articles-list {
+		display: grid;
+		gap: 0.625rem;
+	}
+	.article-analytics-row {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 1.25rem;
+		padding: 0.875rem;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-lg);
+		background: var(--bg-card);
+		transition: var(--transition);
+	}
+	.article-analytics-row:hover {
+		border-color: var(--border-focus);
+		box-shadow: var(--shadow-sm);
+	}
+	@media (max-width: 640px) {
+		.article-analytics-row {
+			flex-direction: column;
+			align-items: flex-start;
+			gap: 0.75rem;
+		}
+		.category-override-form {
+			width: 100%;
+		}
+	}
+	.article-main-copy {
+		display: grid;
+		gap: 0.375rem;
+		flex: 1;
+		min-width: 0;
+	}
+	.article-title {
+		font-family: var(--font-body);
+		font-weight: 700;
+		font-size: 0.875rem;
+		line-height: 1.45;
+		color: var(--text-main);
+		text-decoration: none;
+		display: -webkit-box;
+		line-clamp: 2;
+		-webkit-line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
+	}
+	.article-title:hover {
+		color: var(--primary);
+	}
+	.article-metadata {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.375rem;
+		align-items: center;
+		font-size: 0.75rem;
+		color: var(--text-muted);
+	}
+	.source-label {
+		color: var(--primary);
+		font-weight: 700;
+	}
+	.stats-label strong {
+		color: var(--text-main);
+	}
+	.bot-label, .date-label {
+		color: var(--text-light);
+	}
+	.category-override-form {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+	.category-override-form select {
+		padding: 0.375rem 0.5rem;
+		min-width: 8rem;
+	}
+	.override-save-btn {
+		font-family: var(--font-body);
+		font-size: 0.75rem;
+		font-weight: 700;
+		color: var(--text-main);
+		background: var(--bg-base);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-md);
+		padding: 0.375rem 0.625rem;
+		transition: var(--transition);
+		cursor: pointer;
+	}
+	.override-save-btn:hover {
+		background: var(--primary-light);
+		color: var(--primary);
+		border-color: var(--primary);
+	}
+
+	/* Click logs */
+	.clicks-log-list {
+		display: grid;
+		gap: 0.5rem;
+		max-height: 38rem;
+		overflow-y: auto;
+		padding-right: 0.25rem;
+	}
+	.click-event-row {
+		display: grid;
+		gap: 0.25rem;
+		padding: 0.75rem;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-md);
+		background: var(--bg-card);
+	}
+	.click-title {
+		font-size: 0.8125rem;
+		font-weight: 750;
+		color: var(--text-main);
+		line-height: 1.4;
+	}
+	.click-meta {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.375rem;
+		align-items: center;
+		font-size: 0.75rem;
+		color: var(--text-light);
+	}
+	.click-source {
+		color: var(--text-muted);
+		font-weight: 600;
+	}
+	.click-type {
+		font-weight: 700;
+		color: var(--text-muted);
+	}
+	.click-type.is-bot {
+		color: #df1c1c;
+	}
+	.click-type.is-unique {
+		color: var(--success);
+	}
+	.click-utm {
+		color: var(--primary);
+		font-weight: 600;
+	}
+	.click-ref {
+		font-style: italic;
+	}
+</style>
