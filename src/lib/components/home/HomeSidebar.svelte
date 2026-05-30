@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Category, Weather } from '$lib/home/data';
+	import type { Category, Weather, Publisher } from '$lib/home/data';
 
 	type ExchangeRate = {
 		code: string;
@@ -21,7 +21,10 @@
 		exchangeRates,
 		horoscopeTexts,
 		categoryCount,
-		onCategoryChange
+		onCategoryChange,
+		publishers = [],
+		activePublisher = 'all',
+		onPublisherToggle
 	}: {
 		categories: Category[];
 		activeCategory: string;
@@ -32,29 +35,127 @@
 		horoscopeTexts: HoroscopeTexts;
 		categoryCount: (slug: string) => number;
 		onCategoryChange: (slug: string) => void;
+		publishers?: Publisher[];
+		activePublisher?: string;
+		onPublisherToggle: (slug: string) => void;
 	} = $props();
 
 	const currentWeather = $derived(weatherData[weatherCity] ?? weatherData.Budapest);
+	type SidebarTab = 'rovatok' | 'oldalak' | 'trending';
+
+	const publisherAccentMap: Record<string, string> = {
+		index: 'var(--color-index)',
+		telex: 'var(--color-telex)',
+		'24-hu': 'var(--color-24)',
+		hvg: 'var(--color-hvg)',
+		'444': 'var(--color-444)',
+		portfolio: 'var(--color-portfolio)',
+		blikk: 'var(--color-blikk)',
+		qubit: 'var(--color-qubit)',
+		g7: 'var(--color-g7)',
+		nepszava: 'var(--color-nepszava)',
+		mandiner: 'var(--color-mandiner)'
+	};
+
+	let activeTab = $state<SidebarTab>('rovatok');
+
+	function publisherAccent(slug: string) {
+		return publisherAccentMap[slug] ?? 'var(--text-light)';
+	}
 </script>
 
 <aside class="sidebar-left">
-	<nav class="panel" aria-label="Kategóriák">
-		<h2 class="panel-title">
-			<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-				<path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25A2.25 2.25 0 0 1 8.25 10.5H6A2.25 2.25 0 0 1 3.75 8.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z" />
-			</svg>
-			Rovatok
-		</h2>
-		<ul class="cat-nav-list">
-			{#each categories as category (category.slug)}
-				<li class:active={activeCategory === category.slug} class="cat-nav-item">
-					<button type="button" onclick={() => onCategoryChange(category.slug)}>
-						{category.name}
-						<span class="cat-badge">{categoryCount(category.slug)}</span>
-					</button>
-				</li>
-			{/each}
-		</ul>
+	<nav class="panel tabbed-panel" aria-label="Fő navigációs widgetek">
+		<div class="tabs-header" role="tablist">
+			<button
+				id="tab-rovatok"
+				type="button"
+				class="tab-btn"
+				class:active={activeTab === 'rovatok'}
+				onclick={() => activeTab = 'rovatok'}
+				role="tab"
+				aria-selected={activeTab === 'rovatok'}
+				aria-controls="panel-rovatok"
+				tabindex={activeTab === 'rovatok' ? 0 : -1}
+			>
+				Rovatok
+			</button>
+			<button
+				id="tab-oldalak"
+				type="button"
+				class="tab-btn"
+				class:active={activeTab === 'oldalak'}
+				onclick={() => activeTab = 'oldalak'}
+				role="tab"
+				aria-selected={activeTab === 'oldalak'}
+				aria-controls="panel-oldalak"
+				tabindex={activeTab === 'oldalak' ? 0 : -1}
+			>
+				Oldalak
+			</button>
+			<button
+				id="tab-trending"
+				type="button"
+				class="tab-btn"
+				class:active={activeTab === 'trending'}
+				onclick={() => activeTab = 'trending'}
+				role="tab"
+				aria-selected={activeTab === 'trending'}
+				aria-controls="panel-trending"
+				tabindex={activeTab === 'trending' ? 0 : -1}
+			>
+				Trending
+			</button>
+		</div>
+
+		<div class="tab-content">
+			{#if activeTab === 'rovatok'}
+				<div id="panel-rovatok" role="tabpanel" aria-labelledby="tab-rovatok">
+					<ul class="cat-nav-list">
+						{#each categories as category (category.slug)}
+							<li class:active={activeCategory === category.slug} class="cat-nav-item">
+								<button type="button" onclick={() => onCategoryChange(category.slug)}>
+									{category.name}
+									<span class="cat-badge">{categoryCount(category.slug)}</span>
+								</button>
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{:else if activeTab === 'oldalak'}
+				<div id="panel-oldalak" role="tabpanel" aria-labelledby="tab-oldalak">
+					<ul class="pub-nav-list">
+						<li class:active={activePublisher === 'all'} class="pub-nav-item">
+							<button type="button" onclick={() => onPublisherToggle('all')}>
+								<span class="pub-dot all"></span>
+								<div class="pub-info">
+									<span class="pub-name">Összes oldal</span>
+									<span class="pub-host">mindegyik forrás</span>
+								</div>
+							</button>
+						</li>
+						{#each publishers as publisher (publisher.slug)}
+							<li class:active={activePublisher === publisher.slug} class="pub-nav-item">
+								<button type="button" onclick={() => onPublisherToggle(publisher.slug)}>
+									<span class="pub-dot" style:background-color={publisherAccent(publisher.slug)}></span>
+									<div class="pub-info">
+										<span class="pub-name">{publisher.name}</span>
+										<span class="pub-host">{publisher.host}</span>
+									</div>
+								</button>
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{:else if activeTab === 'trending'}
+				<div id="panel-trending" role="tabpanel" aria-labelledby="tab-trending" class="trending-placeholder">
+					<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="trending-icon">
+						<path stroke-linecap="round" stroke-linejoin="round" d="M2.25 18 9 11.25l4.306 4.306a11.95 11.95 0 0 1 5.814-5.518l2.74-1.22m0 0-5.94-2.281m5.94 2.28-2.28 5.941" />
+					</svg>
+					<p class="placeholder-text">Hamarosan érkezik.</p>
+				</div>
+			{/if}
+		</div>
 	</nav>
 
 	<section class="panel">
@@ -143,3 +244,153 @@
 		<div class="horoscope-text">{horoscopeTexts[horoscopeSign]}</div>
 	</section>
 </aside>
+
+<style>
+	.tabbed-panel {
+		padding: 0;
+		overflow: hidden;
+	}
+
+	.tabs-header {
+		display: flex;
+		border-bottom: 1px solid var(--border);
+		background-color: var(--bg-alt);
+		padding: 4px;
+		gap: 4px;
+	}
+
+	.tab-btn {
+		flex: 1;
+		padding: 8px 4px;
+		font-family: var(--font-display);
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--text-muted);
+		border-radius: var(--radius-sm);
+		text-align: center;
+		transition: var(--transition);
+	}
+
+	.tab-btn:hover {
+		background-color: rgba(255, 255, 255, 0.5);
+		color: var(--text-main);
+	}
+
+	.tab-btn.active {
+		background-color: var(--bg-card);
+		color: var(--primary);
+		box-shadow: var(--shadow-sm);
+	}
+
+	.tab-content {
+		padding: 16px;
+	}
+
+	.pub-nav-list {
+		list-style: none;
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		max-height: 400px;
+		overflow-y: auto;
+		padding-right: 4px;
+		padding-left: 0;
+		margin: 0;
+	}
+
+	.pub-nav-list::-webkit-scrollbar {
+		width: 4px;
+	}
+	.pub-nav-list::-webkit-scrollbar-track {
+		background: transparent;
+	}
+	.pub-nav-list::-webkit-scrollbar-thumb {
+		background: var(--border);
+		border-radius: 2px;
+	}
+
+	.pub-nav-item button {
+		width: 100%;
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		padding: 8px 12px;
+		border-radius: var(--radius-sm);
+		text-align: left;
+		transition: var(--transition);
+	}
+
+	.pub-nav-item button:hover {
+		background-color: var(--bg-base);
+	}
+
+	.pub-nav-item.active button {
+		background-color: var(--primary-light);
+	}
+
+	.pub-dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		flex-shrink: 0;
+	}
+
+	.pub-dot.all {
+		background-color: var(--text-light);
+	}
+
+	.pub-info {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+	}
+
+	.pub-name {
+		font-size: 13px;
+		font-weight: 600;
+		color: var(--text-main);
+	}
+
+	.pub-nav-item.active .pub-name {
+		color: var(--primary);
+	}
+
+	.pub-host {
+		font-size: 11px;
+		color: var(--text-light);
+	}
+
+	.trending-placeholder {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		padding: 40px 16px;
+		text-align: center;
+		color: var(--text-light);
+		gap: 12px;
+	}
+
+	.trending-icon {
+		width: 32px;
+		height: 32px;
+		stroke-width: 1.5;
+		color: var(--text-light);
+	}
+
+	.placeholder-text {
+		font-size: 12px;
+		font-weight: 500;
+		line-height: 1.4;
+	}
+
+	@media (max-width: 600px) {
+		.tabs-header {
+			overflow-x: auto;
+		}
+
+		.tab-btn {
+			min-width: 90px;
+		}
+	}
+</style>

@@ -22,6 +22,8 @@
 
 	let searchQuery = $derived(data.searchQuery);
 	let weatherCity = $state('Budapest');
+	let showExcerpt = $state(false);
+	let fontSize = $state(14);
 	let horoscopeSign = $state('kos');
 	let visibleCount = $state(18);
 	let bookmarks = $state<Article[]>([]);
@@ -224,6 +226,7 @@
 		const normalizedQuery = query.toLocaleLowerCase('hu-HU');
 		return [
 			article.title,
+			article.excerpt ?? '',
 			article.sourceName,
 			article.categoryName,
 			...article.categorySlugs
@@ -311,6 +314,8 @@
 	activePublisher={data.activePublisher}
 	activeTimeFilter={data.activeTimeFilter}
 	searchActionPath={data.canonicalPath}
+	bind:showExcerpt
+	bind:fontSize
 />
 
 <main class="app-container">
@@ -332,13 +337,14 @@
 			{horoscopeTexts}
 			{categoryCount}
 			onCategoryChange={selectCategory}
+			publishers={data.publishers}
+			activePublisher={data.activePublisher}
+			onPublisherToggle={togglePublisher}
 		/>
 
 		<NewsFeed
-			publishers={data.publishers}
 			{timeFilters}
 			activeTimeFilter={data.activeTimeFilter}
-			activePublisher={data.activePublisher}
 			bind:visibleCount
 			{filteredArticles}
 			{visibleArticles}
@@ -349,9 +355,10 @@
 			searchTotal={data.searchTotal}
 			searchEngine={data.searchEngine}
 			searchError={data.searchError}
-			onPublisherToggle={togglePublisher}
 			onTimeFilterChange={selectTimeFilter}
 			onBookmarkToggle={toggleBookmark}
+			{showExcerpt}
+			{fontSize}
 		/>
 
 		<HomeRail {topArticles} {savedArticles} onBookmarkToggle={toggleBookmark} />

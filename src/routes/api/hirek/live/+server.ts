@@ -83,6 +83,7 @@ function matchesLiveFilters(
 function articleMatchesQuery(article: Article, query: string) {
 	return [
 		article.title,
+		article.excerpt ?? '',
 		article.sourceName,
 		article.categoryName,
 		...article.categorySlugs

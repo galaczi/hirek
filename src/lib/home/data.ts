@@ -12,6 +12,7 @@ export type Publisher = {
 export type Article = {
 	id: number;
 	title: string;
+	excerpt?: string | null;
 	category: string;
 	categoryName: string;
 	categorySlugs: string[];

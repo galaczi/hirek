@@ -216,6 +216,7 @@ function toLiveArticle(
 	return {
 		id: article.id,
 		title: article.title,
+		excerpt: article.excerpt,
 		category: primaryCategory?.slug ?? 'uncategorized',
 		categoryName: primaryCategory?.name ?? 'Egyéb',
 		categorySlugs: source.categories.map((category) => category.slug),

@@ -183,6 +183,7 @@ async function getArticles(orderBy: 'fresh' | 'top', limit: number, filters: Hom
 		.select({
 			id: articles.id,
 			title: articles.title,
+			excerpt: articles.excerpt,
 			sourceSlug: sources.slug,
 			sourceName: sources.name,
 			categorySlug: sql<string | null>`(array_remove(array_agg(DISTINCT ${categories.slug}), NULL))[1]`,
@@ -199,6 +200,7 @@ async function getArticles(orderBy: 'fresh' | 'top', limit: number, filters: Hom
 		.groupBy(
 			articles.id,
 			articles.title,
+			articles.excerpt,
 			articles.publishedAt,
 			articles.clickScore,
 			sources.id,
@@ -264,6 +266,7 @@ async function getTotalArticles() {
 function toArticle(row: {
 	id: number;
 	title: string;
+	excerpt: string | null;
 	sourceSlug: string;
 	sourceName: string;
 	categorySlug: string | null;
@@ -275,6 +278,7 @@ function toArticle(row: {
 	return {
 		id: row.id,
 		title: row.title,
+		excerpt: row.excerpt,
 		category: row.categorySlug ?? 'uncategorized',
 		categoryName: row.categoryName ?? 'Egyéb',
 		categorySlugs: row.categorySlugs ?? [],
@@ -291,6 +295,7 @@ function toArticleFromSearchResult(result: SearchResult): Article {
 	return {
 		id: result.id,
 		title: result.title,
+		excerpt: result.excerpt,
 		category: categorySlug,
 		categoryName: categorySlug,
 		categorySlugs: result.categorySlugs,

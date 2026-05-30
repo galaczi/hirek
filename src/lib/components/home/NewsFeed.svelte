@@ -1,12 +1,10 @@
 <script lang="ts">
-	import type { Article, Publisher } from '$lib/home/data';
+	import type { Article } from '$lib/home/data';
 	import { formatTime, recencyClass } from '$lib/home/utils';
 
 	let {
-		publishers,
 		timeFilters,
 		activeTimeFilter = $bindable('all'),
-		activePublisher = $bindable('all'),
 		visibleCount = $bindable(18),
 		filteredArticles,
 		visibleArticles,
@@ -17,14 +15,13 @@
 		searchTotal = null,
 		searchEngine = null,
 		searchError = null,
-		onPublisherToggle,
 		onTimeFilterChange,
-		onBookmarkToggle
+		onBookmarkToggle,
+		showExcerpt = false,
+		fontSize = 14
 	}: {
-		publishers: Publisher[];
 		timeFilters: Array<{ value: string; label: string }>;
 		activeTimeFilter: string;
-		activePublisher: string;
 		visibleCount: number;
 		filteredArticles: Article[];
 		visibleArticles: Article[];
@@ -35,13 +32,18 @@
 		searchTotal?: number | null;
 		searchEngine?: 'meilisearch' | 'postgres' | null;
 		searchError?: string | null;
-		onPublisherToggle: (slug: string) => void;
 		onTimeFilterChange: (value: string) => void;
 		onBookmarkToggle: (article: Article) => void;
+		showExcerpt?: boolean;
+		fontSize?: number;
 	} = $props();
 </script>
 
-<section class="feed-column" aria-label="Hírfolyam">
+<section
+	class="feed-column"
+	aria-label="Hírfolyam"
+	style={`--news-title-size: ${fontSize}px; --news-excerpt-size: ${Math.max(12, fontSize - 1)}px;`}
+>
 	<div class="feed-header">
 		<div class="time-filters" role="group" aria-label="Időbeli szűrés">
 			{#each timeFilters as filter (filter.value)}
@@ -52,19 +54,6 @@
 					onclick={() => onTimeFilterChange(filter.value)}
 				>
 					{filter.label}
-				</button>
-			{/each}
-		</div>
-
-		<div class="publisher-bar" role="group" aria-label="Források szerinti szűrés">
-			{#each publishers as publisher (publisher.slug)}
-				<button
-					type="button"
-					class:active={activePublisher === publisher.slug}
-					class="pub-tag"
-					onclick={() => onPublisherToggle(publisher.slug)}
-				>
-					{publisher.host}
 				</button>
 			{/each}
 		</div>
@@ -91,27 +80,38 @@
 			</div>
 		{:else}
 			{#each visibleArticles as article (article.id)}
-				<article class:fresh-arrival={freshArticleIds.includes(article.id)} class="news-item">
-					<div class="news-item-left">
-						<span class={`recency-indicator ${recencyClass(article)}`} title="Frissesség"></span>
-						<span class="news-time">{formatTime(article.publishedAt)}</span>
-						<a class="news-title" href={`/go/${article.id}`} target="_blank" rel="noopener">{article.title}</a>
+				<article
+					class:fresh-arrival={freshArticleIds.includes(article.id)}
+					class="news-item"
+					class:has-excerpt={showExcerpt && Boolean(article.excerpt?.trim())}
+				>
+					<div class="news-item-main">
+						<div class="news-item-left">
+							<span class={`recency-indicator ${recencyClass(article)}`} title="Frissesség"></span>
+							<span class="news-time">{formatTime(article.publishedAt)}</span>
+							<a class="news-title" href={`/go/${article.id}`} target="_blank" rel="noopener">{article.title}</a>
+						</div>
+						<div class="news-item-right">
+							<span class={`source-badge ${article.source}`}>{article.sourceName}</span>
+							<span class="item-cat-badge">{categoryNames[article.category]}</span>
+							<button
+								type="button"
+								class:saved={bookmarkedIds.includes(article.id)}
+								class="bookmark-btn"
+								onclick={() => onBookmarkToggle(article)}
+								aria-label={bookmarkedIds.includes(article.id) ? 'Könyvjelző eltávolítása' : 'Könyvjelző hozzáadása'}
+							>
+								<svg xmlns="http://www.w3.org/2000/svg" fill={bookmarkedIds.includes(article.id) ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+									<path stroke-linecap="round" stroke-linejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0 1 11.186 0Z" />
+								</svg>
+							</button>
+						</div>
 					</div>
-					<div class="news-item-right">
-						<span class={`source-badge ${article.source}`}>{article.sourceName}</span>
-						<span class="item-cat-badge">{categoryNames[article.category]}</span>
-						<button
-							type="button"
-							class:saved={bookmarkedIds.includes(article.id)}
-							class="bookmark-btn"
-							onclick={() => onBookmarkToggle(article)}
-							aria-label={bookmarkedIds.includes(article.id) ? 'Könyvjelző eltávolítása' : 'Könyvjelző hozzáadása'}
-						>
-							<svg xmlns="http://www.w3.org/2000/svg" fill={bookmarkedIds.includes(article.id) ? 'currentColor' : 'none'} viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-								<path stroke-linecap="round" stroke-linejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0 1 11.186 0Z" />
-							</svg>
-						</button>
-					</div>
+					{#if showExcerpt && article.excerpt?.trim()}
+						<p class="news-excerpt">
+							{article.excerpt}
+						</p>
+					{/if}
 				</article>
 			{/each}
 		{/if}
@@ -125,3 +125,59 @@
 		</div>
 	{/if}
 </section>
+
+<style>
+	.news-title {
+		font-size: var(--news-title-size);
+	}
+
+	.news-item.has-excerpt {
+		display: flex;
+		flex-direction: column;
+		align-items: stretch;
+		gap: 8px;
+	}
+
+	.news-item-main {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 16px;
+		width: 100%;
+	}
+
+	.news-excerpt {
+		color: var(--text-muted);
+		line-height: 1.5;
+		font-size: var(--news-excerpt-size);
+		margin-left: 56px;
+		padding-top: 6px;
+		border-top: 1px dashed var(--border);
+		margin-top: 0;
+		margin-bottom: 0;
+	}
+
+	@media (max-width: 900px) {
+		.news-excerpt {
+			margin-left: 0;
+			padding-left: 18px;
+		}
+	}
+
+	@media (max-width: 600px) {
+		.news-item-main {
+			flex-direction: column;
+			align-items: stretch;
+			gap: 8px;
+		}
+
+		.news-item-right {
+			width: 100%;
+			justify-content: space-between;
+		}
+
+		.news-excerpt {
+			padding-left: 0;
+		}
+	}
+</style>
