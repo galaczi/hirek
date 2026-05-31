@@ -10,6 +10,14 @@
 		savedArticles: Article[];
 		onBookmarkToggle: (article: Article) => void;
 	} = $props();
+
+	function articleHref(article: Article) {
+		const params = new URLSearchParams();
+		if (article.surfaceKey) params.set('surface', article.surfaceKey);
+		if (article.deliveryMode && article.deliveryMode !== 'organic') params.set('mode', article.deliveryMode);
+		const query = params.toString();
+		return query ? `/go/${article.id}?${query}` : `/go/${article.id}`;
+	}
 </script>
 
 <aside class="sidebar-right">
@@ -25,7 +33,7 @@
 				<div class="top-news-item">
 					<span class="top-rank">{index + 1}</span>
 					<div class="top-content">
-						<a class="top-title" href={`/go/${article.id}`} target="_blank" rel="noopener">{article.title}</a>
+						<a class="top-title" href={articleHref(article)} target="_blank" rel="noopener">{article.title}</a>
 						<div class="top-meta">
 							<span class={`top-source source-badge ${article.source}`}>{article.sourceName}</span>
 							<span>{article.clicks.toLocaleString('hu-HU')} kattintás</span>
@@ -49,7 +57,7 @@
 			{:else}
 				{#each savedArticles as article (article.id)}
 					<div class="bookmark-item">
-						<a class="bookmark-item-title" href={`/go/${article.id}`} target="_blank" rel="noopener">{article.title}</a>
+						<a class="bookmark-item-title" href={articleHref(article)} target="_blank" rel="noopener">{article.title}</a>
 						<button
 							type="button"
 							class="remove-bookmark-btn"

@@ -1,12 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+	getApprovedCommercialDefaults,
+	getPendingCommercialDefaults
+} from '../../source-commercial.ts';
+import {
 	normalizeDomain,
 	normalizeImpressionPayload,
 	normalizeTrackingMetadata,
 	validateAdminSourceCreateInput,
 	validatePartnerSignupInput,
-	validateUtmSettingsInput
+	validateSourceAcquisitionInput,
+	validateSourceCommercialInput,
+	validateUtmSettingsInput,
+	validateWalletTopUpInput
 } from './input.ts';
 
 test('partner signup validation normalizes canonical identifiers', () => {
@@ -79,6 +86,137 @@ test('partner utm validation rejects unsupported characters', () => {
 	if (result.ok) return;
 
 	assert.ok(result.fieldErrors.utmSource);
+});
+
+test('source commercial validation blocks active settings before approval', () => {
+	const result = validateSourceCommercialInput({
+		partnerPackage: 'growth',
+		partnerStatus: 'active',
+		exchangeStatus: 'active',
+		trafficTarget: '1200',
+		approvalStatus: 'pending'
+	});
+
+	assert.equal(result.ok, false);
+	if (result.ok) return;
+
+	assert.match(result.fieldErrors.partnerStatus ?? '', /jóváhagyott/i);
+	assert.match(result.fieldErrors.exchangeStatus ?? '', /jóváhagyott/i);
+});
+
+test('source commercial validation normalizes approved commercial settings', () => {
+	const result = validateSourceCommercialInput({
+		partnerPackage: 'partner',
+		partnerStatus: 'active',
+		exchangeStatus: 'eligible',
+		trafficTarget: '42.8',
+		approvalStatus: 'approved'
+	});
+
+	assert.equal(result.ok, true);
+	if (!result.ok) return;
+
+	assert.deepEqual(result.data, {
+		partnerPackage: 'partner',
+		partnerStatus: 'active',
+		exchangeStatus: 'eligible',
+		trafficTarget: 42
+	});
+});
+
+test('source acquisition validation normalizes approved acquisition settings', () => {
+	const result = validateSourceAcquisitionInput({
+		trustScore: '7.8',
+		boostStatus: 'active',
+		boostRouteTargets: ['home', 'category', 'category', 'invalid'],
+		maxCpc: '1250',
+		dailySpendCap: '10000',
+		exchangeCreditBalance: '4000',
+		approvalStatus: 'approved'
+	});
+
+	assert.equal(result.ok, true);
+	if (!result.ok) return;
+
+	assert.deepEqual(result.data, {
+		trustScore: 8,
+		boostStatus: 'active',
+		boostRouteTargets: ['home', 'category'],
+		maxCpc: 1250,
+		dailySpendCap: 10000,
+		exchangeCreditBalance: 4000
+	});
+});
+
+test('source acquisition validation blocks active boost before approval', () => {
+	const result = validateSourceAcquisitionInput({
+		trustScore: '5',
+		boostStatus: 'active',
+		boostRouteTargets: ['home'],
+		maxCpc: '100',
+		dailySpendCap: '1000',
+		exchangeCreditBalance: '0',
+		approvalStatus: 'pending'
+	});
+
+	assert.equal(result.ok, false);
+	if (result.ok) return;
+
+	assert.match(result.fieldErrors.boostStatus ?? '', /jóváhagyott/i);
+});
+
+test('wallet topup validation requires positive amount and valid billing fields', () => {
+	const invalid = validateWalletTopUpInput({
+		amount: '0',
+		billingName: '',
+		billingEmail: 'nem-email'
+	});
+
+	assert.equal(invalid.ok, false);
+	if (invalid.ok) return;
+
+	assert.ok(invalid.fieldErrors.amount);
+	assert.ok(invalid.fieldErrors.billingName);
+	assert.ok(invalid.fieldErrors.billingEmail);
+
+	const valid = validateWalletTopUpInput({
+		amount: '25000',
+		billingName: 'Teszt Kft.',
+		billingEmail: 'penzugy@example.com'
+	});
+
+	assert.equal(valid.ok, true);
+	if (!valid.ok) return;
+
+	assert.deepEqual(valid.data, {
+		amount: 25000,
+		billingName: 'Teszt Kft.',
+		billingEmail: 'penzugy@example.com'
+	});
+});
+
+test('commercial defaults promote approved sources into the default package path', () => {
+	assert.deepEqual(getPendingCommercialDefaults(), {
+		partnerPackage: 'free',
+		partnerStatus: 'none',
+		exchangeStatus: 'none',
+		trafficTarget: 0
+	});
+
+	assert.deepEqual(
+		getApprovedCommercialDefaults({
+			partnerPackage: 'free',
+			partnerStatus: 'none',
+			exchangeStatus: 'none',
+			trafficTarget: 0
+		}),
+		{
+			partnerPackage: 'free',
+			partnerStatus: 'active',
+			exchangeStatus: 'eligible',
+			trafficTarget: 0
+		}
+	);
 });
 
 test('tracking metadata is trimmed and bounded before persistence', () => {

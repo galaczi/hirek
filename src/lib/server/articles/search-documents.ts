@@ -1,6 +1,7 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { articleCategories, articles, categories, sources } from '$lib/server/db/schema';
+import { retentionCutoff } from '$lib/server/articles/stats';
 import type { ArticleSearchDocument } from '$lib/server/search/types';
 
 export async function getArticleSearchDocuments(articleIds: number[]) {
@@ -22,7 +23,7 @@ export async function getArticleSearchDocuments(articleIds: number[]) {
 		.innerJoin(sources, eq(sources.id, articles.sourceId))
 		.leftJoin(articleCategories, eq(articleCategories.articleId, articles.id))
 		.leftJoin(categories, eq(categories.id, articleCategories.categoryId))
-		.where(and(eq(articles.active, true), inArray(articles.id, articleIds)))
+		.where(and(eq(articles.active, true), gte(articles.publishedAt, retentionCutoff()), inArray(articles.id, articleIds)))
 		.groupBy(
 			articles.id,
 			articles.title,

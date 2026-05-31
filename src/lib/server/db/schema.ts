@@ -1,8 +1,10 @@
 import {
 	boolean,
+	date,
 	index,
 	integer,
 	pgTable,
+	primaryKey,
 	serial,
 	text,
 	timestamp,
@@ -21,7 +23,18 @@ export const sources = pgTable(
 		statusNote: text('status_note'),
 		partnerPackage: text('partner_package').notNull().default('free'),
 		partnerStatus: text('partner_status').notNull().default('none'),
+		exchangeStatus: text('exchange_status').notNull().default('none'),
 		trafficTarget: integer('traffic_target').notNull().default(0),
+		trustScore: integer('trust_score').notNull().default(5),
+		boostStatus: text('boost_status').notNull().default('paused'),
+		boostRouteTargets: text('boost_route_targets').notNull().default('home,top,category,source,source_category'),
+		walletBalance: integer('wallet_balance').notNull().default(0),
+		exchangeCreditBalance: integer('exchange_credit_balance').notNull().default(0),
+		maxCpc: integer('max_cpc').notNull().default(0),
+		dailySpendCap: integer('daily_spend_cap').notNull().default(0),
+		lifetimeBillableClicks: integer('lifetime_billable_clicks').notNull().default(0),
+		lifetimeWalletSpend: integer('lifetime_wallet_spend').notNull().default(0),
+		lifetimeExchangeSpend: integer('lifetime_exchange_spend').notNull().default(0),
 		utmSource: text('utm_source').notNull().default('hirek.hu'),
 		utmMedium: text('utm_medium').notNull().default('referral'),
 		utmCampaign: text('utm_campaign').notNull().default('hirek_stream'),
@@ -33,7 +46,9 @@ export const sources = pgTable(
 		domainIdx: uniqueIndex('sources_domain_idx').on(table.domain),
 		approvalStatusIdx: index('sources_approval_status_idx').on(table.approvalStatus),
 		statusIdx: index('sources_status_idx').on(table.status),
-		partnerStatusIdx: index('sources_partner_status_idx').on(table.partnerStatus)
+		partnerStatusIdx: index('sources_partner_status_idx').on(table.partnerStatus),
+		exchangeStatusIdx: index('sources_exchange_status_idx').on(table.exchangeStatus),
+		boostStatusIdx: index('sources_boost_status_idx').on(table.boostStatus)
 	})
 );
 
@@ -273,12 +288,13 @@ export const clickEvents = pgTable(
 			.references(() => sources.id, { onDelete: 'cascade' }),
 		categoryId: integer('category_id').references(() => categories.id, { onDelete: 'set null' }),
 		referrer: text('referrer'),
+		surface: text('surface'),
+		acquisitionMode: text('acquisition_mode').notNull().default('organic'),
 		userAgent: text('user_agent'),
 		ipHash: text('ip_hash'),
 		utmCampaign: text('utm_campaign').notNull().default('hirek_stream'),
 		utmContent: text('utm_content'),
-		isBot: boolean('is_bot').notNull().default(false),
-		botName: text('bot_name'),
+		chargeAmount: integer('charge_amount').notNull().default(0),
 		isUnique: boolean('is_unique').notNull().default(true),
 		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
 	},
@@ -286,37 +302,80 @@ export const clickEvents = pgTable(
 		articleIdx: index('click_events_article_idx').on(table.articleId),
 		sourceIdx: index('click_events_source_idx').on(table.sourceId),
 		categoryIdx: index('click_events_category_idx').on(table.categoryId),
+		surfaceIdx: index('click_events_surface_idx').on(table.surface),
+		acquisitionModeIdx: index('click_events_acquisition_mode_idx').on(table.acquisitionMode),
 		campaignIdx: index('click_events_campaign_idx').on(table.utmCampaign),
-		botIdx: index('click_events_bot_idx').on(table.isBot),
 		uniqueIdx: index('click_events_unique_idx').on(table.isUnique),
 		createdAtIdx: index('click_events_created_at_idx').on(table.createdAt)
 	})
 );
 
-export const impressionEvents = pgTable(
-	'impression_events',
+export const sourceSurfaceRollingStats = pgTable(
+	'source_surface_rolling_stats',
 	{
-		id: serial('id').primaryKey(),
-		articleId: integer('article_id')
-			.notNull()
-			.references(() => articles.id, { onDelete: 'cascade' }),
 		sourceId: integer('source_id')
 			.notNull()
 			.references(() => sources.id, { onDelete: 'cascade' }),
-		categoryId: integer('category_id').references(() => categories.id, { onDelete: 'set null' }),
-		pagePath: text('page_path'),
-		referrer: text('referrer'),
-		userAgent: text('user_agent'),
-		ipHash: text('ip_hash'),
-		isBot: boolean('is_bot').notNull().default(false),
-		botName: text('bot_name'),
+		surface: text('surface').notNull(),
+		day: date('day', { mode: 'string' }).notNull(),
+		impressions: integer('impressions').notNull().default(0),
+		clicks: integer('clicks').notNull().default(0),
+		uniqueClicks: integer('unique_clicks').notNull().default(0),
+		spendAmount: integer('spend_amount').notNull().default(0),
+		updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+	},
+	(table) => ({
+		pk: primaryKey({ columns: [table.sourceId, table.surface, table.day] }),
+		surfaceDayIdx: index('source_surface_rolling_stats_surface_day_idx').on(table.surface, table.day),
+		dayIdx: index('source_surface_rolling_stats_day_idx').on(table.day)
+	})
+);
+
+export const sourceBillingInvoices = pgTable(
+	'source_billing_invoices',
+	{
+		id: serial('id').primaryKey(),
+		sourceId: integer('source_id')
+			.notNull()
+			.references(() => sources.id, { onDelete: 'cascade' }),
+		amount: integer('amount').notNull(),
+		status: text('status').notNull().default('pending'),
+		provider: text('provider').notNull().default('local'),
+		externalId: text('external_id'),
+		externalNumber: text('external_number'),
+		description: text('description').notNull(),
+		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+		updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
+	},
+	(table) => ({
+		sourceIdx: index('source_billing_invoices_source_idx').on(table.sourceId),
+		statusIdx: index('source_billing_invoices_status_idx').on(table.status)
+	})
+);
+
+export const sourceBillingLedger = pgTable(
+	'source_billing_ledger',
+	{
+		id: serial('id').primaryKey(),
+		sourceId: integer('source_id')
+			.notNull()
+			.references(() => sources.id, { onDelete: 'cascade' }),
+		invoiceId: integer('invoice_id').references(() => sourceBillingInvoices.id, {
+			onDelete: 'set null'
+		}),
+		entryType: text('entry_type').notNull(),
+		fundingType: text('funding_type'),
+		surface: text('surface'),
+		articleId: integer('article_id').references(() => articles.id, { onDelete: 'set null' }),
+		amount: integer('amount').notNull(),
+		description: text('description').notNull(),
+		metadata: text('metadata'),
 		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
 	},
 	(table) => ({
-		articleIdx: index('impression_events_article_idx').on(table.articleId),
-		sourceIdx: index('impression_events_source_idx').on(table.sourceId),
-		categoryIdx: index('impression_events_category_idx').on(table.categoryId),
-		createdAtIdx: index('impression_events_created_at_idx').on(table.createdAt),
-		botIdx: index('impression_events_bot_idx').on(table.isBot)
+		sourceIdx: index('source_billing_ledger_source_idx').on(table.sourceId),
+		invoiceIdx: index('source_billing_ledger_invoice_idx').on(table.invoiceId),
+		entryTypeIdx: index('source_billing_ledger_entry_type_idx').on(table.entryType),
+		createdAtIdx: index('source_billing_ledger_created_at_idx').on(table.createdAt)
 	})
 );

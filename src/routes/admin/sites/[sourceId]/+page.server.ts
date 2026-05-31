@@ -1,6 +1,8 @@
 import { error, fail, type Actions } from '@sveltejs/kit';
 import { and, eq, ne, or, sql } from 'drizzle-orm';
 import type { PageServerLoad } from './$types';
+import { DEFAULT_PARTNER_STATUS, getApprovedCommercialDefaults } from '$lib/source-commercial';
+import { serializeSurfaceTargets } from '$lib/source-acquisition';
 import { requireAdmin } from '$lib/server/admin/auth';
 import { upsertSourceCategoryRule, deleteSourceCategoryRule } from '$lib/server/categorization/url-rules';
 import { isUniqueViolation } from '$lib/server/db/errors';
@@ -18,6 +20,8 @@ import {
 	normalizeSourceName,
 	normalizeUrlPattern,
 	validateFeedInput,
+	validateSourceAcquisitionInput,
+	validateSourceCommercialInput,
 	validateSourceIdentityInput,
 	validateUrlPatternInput,
 	type ValidationFailure
@@ -41,6 +45,20 @@ export const load: PageServerLoad = async (event) => {
 				approvalStatus: sources.approvalStatus,
 				status: sources.status,
 				statusNote: sources.statusNote,
+				partnerPackage: sources.partnerPackage,
+				partnerStatus: sources.partnerStatus,
+				exchangeStatus: sources.exchangeStatus,
+				trafficTarget: sources.trafficTarget,
+				trustScore: sources.trustScore,
+				boostStatus: sources.boostStatus,
+				boostRouteTargets: sources.boostRouteTargets,
+				walletBalance: sources.walletBalance,
+				exchangeCreditBalance: sources.exchangeCreditBalance,
+				maxCpc: sources.maxCpc,
+				dailySpendCap: sources.dailySpendCap,
+				lifetimeBillableClicks: sources.lifetimeBillableClicks,
+				lifetimeWalletSpend: sources.lifetimeWalletSpend,
+				lifetimeExchangeSpend: sources.lifetimeExchangeSpend,
 				totalFeedCount: sql<number>`count(${sourceFeeds.id})::int`,
 				activeFeedCount: sql<number>`count(${sourceFeeds.id}) FILTER (WHERE ${sourceFeeds.status} = 'active')::int`,
 				lastFetchedAt: sql<Date | string | null>`max(${sourceFeeds.lastFetchedAt})`,
@@ -56,7 +74,22 @@ export const load: PageServerLoad = async (event) => {
 				sources.domain,
 				sources.approvalStatus,
 				sources.status,
-				sources.statusNote
+				sources.statusNote,
+				sources.partnerPackage,
+				sources.partnerStatus,
+				sources.exchangeStatus,
+				sources.trafficTarget
+				,
+				sources.trustScore,
+				sources.boostStatus,
+				sources.boostRouteTargets,
+				sources.walletBalance,
+				sources.exchangeCreditBalance,
+				sources.maxCpc,
+				sources.dailySpendCap,
+				sources.lifetimeBillableClicks,
+				sources.lifetimeWalletSpend,
+				sources.lifetimeExchangeSpend
 			)
 			.limit(1),
 		db.select({ id: categories.id, slug: categories.slug, name: categories.name }).from(categories).orderBy(categories.name),
@@ -100,6 +133,20 @@ export const load: PageServerLoad = async (event) => {
 			approvalStatus: source.approvalStatus,
 			status: source.status,
 			statusNote: source.statusNote,
+			partnerPackage: source.partnerPackage,
+			partnerStatus: source.partnerStatus,
+			exchangeStatus: source.exchangeStatus,
+			trafficTarget: Number(source.trafficTarget),
+			trustScore: Number(source.trustScore),
+			boostStatus: source.boostStatus,
+			boostRouteTargets: source.boostRouteTargets,
+			walletBalance: Number(source.walletBalance),
+			exchangeCreditBalance: Number(source.exchangeCreditBalance),
+			maxCpc: Number(source.maxCpc),
+			dailySpendCap: Number(source.dailySpendCap),
+			lifetimeBillableClicks: Number(source.lifetimeBillableClicks),
+			lifetimeWalletSpend: Number(source.lifetimeWalletSpend),
+			lifetimeExchangeSpend: Number(source.lifetimeExchangeSpend),
 			totalFeedCount: Number(source.totalFeedCount),
 			activeFeedCount: Number(source.activeFeedCount),
 			canConfigure: source.approvalStatus === 'approved',
@@ -194,16 +241,88 @@ export const actions: Actions = {
 
 		return { ok: true, action: 'updateSourceStatus' };
 	},
+	updateSourceCommercial: async (event) => {
+		requireAdmin(event);
+		const sourceId = parseSourceId(event.params.sourceId);
+		const source = await getSourceApprovalContext(sourceId);
+		const form = await event.request.formData();
+		const validation = validateSourceCommercialInput({
+			partnerPackage: form.get('partnerPackage'),
+			partnerStatus: form.get('partnerStatus'),
+			exchangeStatus: form.get('exchangeStatus'),
+			trafficTarget: form.get('trafficTarget'),
+			approvalStatus: source.approvalStatus
+		});
+
+		if (!validation.ok) {
+			return fail(400, {
+				action: 'updateSourceCommercial',
+				error: sourceDetailError(validation)
+			});
+		}
+
+		await db
+			.update(sources)
+			.set({
+				partnerPackage: validation.data.partnerPackage,
+				partnerStatus: validation.data.partnerStatus,
+				exchangeStatus: validation.data.exchangeStatus,
+				trafficTarget: validation.data.trafficTarget,
+				updatedAt: new Date()
+			})
+			.where(eq(sources.id, sourceId));
+
+		return { ok: true, action: 'updateSourceCommercial' };
+	},
+	updateSourceAcquisition: async (event) => {
+		requireAdmin(event);
+		const sourceId = parseSourceId(event.params.sourceId);
+		const source = await getSourceApprovalContext(sourceId);
+		const form = await event.request.formData();
+		const validation = validateSourceAcquisitionInput({
+			trustScore: form.get('trustScore'),
+			boostStatus: form.get('boostStatus'),
+			boostRouteTargets: form.getAll('boostRouteTargets'),
+			maxCpc: form.get('maxCpc'),
+			dailySpendCap: form.get('dailySpendCap'),
+			exchangeCreditBalance: form.get('exchangeCreditBalance'),
+			approvalStatus: source.approvalStatus
+		});
+
+		if (!validation.ok) {
+			return fail(400, { action: 'updateSourceAcquisition', error: sourceDetailError(validation) });
+		}
+
+		await db
+			.update(sources)
+			.set({
+				trustScore: validation.data.trustScore,
+				boostStatus: validation.data.boostStatus,
+				boostRouteTargets: serializeSurfaceTargets(validation.data.boostRouteTargets),
+				maxCpc: validation.data.maxCpc,
+				dailySpendCap: validation.data.dailySpendCap,
+				exchangeCreditBalance: validation.data.exchangeCreditBalance,
+				updatedAt: new Date()
+			})
+			.where(eq(sources.id, sourceId));
+
+		return { ok: true, action: 'updateSourceAcquisition' };
+	},
 	approveSource: async (event) => {
 		requireAdmin(event);
 		const sourceId = parseSourceId(event.params.sourceId);
 		const source = await getSourceApprovalContext(sourceId);
+		const approvedCommercial = getApprovedCommercialDefaults(source);
 
 		await db
 			.update(sources)
 			.set({
 				approvalStatus: 'approved',
 				status: getApprovedSourceStatus(source.status, source.activeFeedCount),
+				partnerPackage: approvedCommercial.partnerPackage,
+				partnerStatus: approvedCommercial.partnerStatus,
+				exchangeStatus: approvedCommercial.exchangeStatus,
+				trafficTarget: approvedCommercial.trafficTarget,
 				updatedAt: new Date()
 			})
 			.where(eq(sources.id, sourceId));
@@ -213,11 +332,14 @@ export const actions: Actions = {
 	rejectSource: async (event) => {
 		requireAdmin(event);
 		const sourceId = parseSourceId(event.params.sourceId);
+		const source = await getSourceApprovalContext(sourceId);
 
 		await db
 			.update(sources)
 			.set({
 				approvalStatus: 'rejected',
+				partnerStatus: DEFAULT_PARTNER_STATUS,
+				exchangeStatus: source.exchangeStatus === 'active' ? 'eligible' : source.exchangeStatus,
 				updatedAt: new Date()
 			})
 			.where(eq(sources.id, sourceId));
@@ -361,6 +483,18 @@ function sourceDetailError(validation: ValidationFailure) {
 	}
 	if (validation.fieldErrors.name) {
 		return 'A forrás neve nem lehet üres vagy túl hosszú.';
+	}
+	if (validation.fieldErrors.partnerPackage) {
+		return validation.fieldErrors.partnerPackage;
+	}
+	if (validation.fieldErrors.partnerStatus) {
+		return validation.fieldErrors.partnerStatus;
+	}
+	if (validation.fieldErrors.exchangeStatus) {
+		return validation.fieldErrors.exchangeStatus;
+	}
+	if (validation.fieldErrors.trafficTarget) {
+		return validation.fieldErrors.trafficTarget;
 	}
 
 	return validation.summary || 'Érvényes forrásadatok szükségesek.';

@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { fail, redirect } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
+import { getPendingCommercialDefaults } from '$lib/source-commercial';
 import { isUniqueViolation } from '$lib/server/db/errors';
 import { auth } from '$lib/server/auth';
 import { db } from '$lib/server/db';
@@ -78,6 +79,7 @@ export const actions: Actions = {
 		}
 
 		let sourceId: number | null = null;
+		const pendingCommercial = getPendingCommercialDefaults();
 
 		try {
 			const [source] = await db
@@ -88,6 +90,10 @@ export const actions: Actions = {
 					domain: normalized.domain,
 					approvalStatus: 'pending',
 					status: 'pending',
+					partnerPackage: pendingCommercial.partnerPackage,
+					partnerStatus: pendingCommercial.partnerStatus,
+					exchangeStatus: pendingCommercial.exchangeStatus,
+					trafficTarget: pendingCommercial.trafficTarget,
 					updatedAt: new Date()
 				})
 				.returning({ id: sources.id });

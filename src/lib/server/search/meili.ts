@@ -1,5 +1,6 @@
 import { Meilisearch } from 'meilisearch';
 import { env } from '$env/dynamic/private';
+import { retentionCutoff } from '$lib/server/articles/stats';
 import type { ArticleSearchDocument, SearchFilters, SearchResponse } from './types';
 
 const ARTICLES_INDEX = env.MEILI_ARTICLES_INDEX ?? 'articles';
@@ -84,6 +85,7 @@ function buildMeiliFilter(filters: SearchFilters) {
 
 	if (filters.category) parts.push(`categorySlugs = ${JSON.stringify(filters.category)}`);
 	if (filters.source) parts.push(`sourceSlug = ${JSON.stringify(filters.source)}`);
+	parts.push(`publishedAt >= ${JSON.stringify(retentionCutoff().toISOString())}`);
 
 	const since = getTimeBoundary(filters.time);
 	if (since) parts.push(`publishedAt >= ${JSON.stringify(since.toISOString())}`);

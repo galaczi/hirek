@@ -18,7 +18,6 @@ const BOT_PATTERNS: Array<[string, RegExp]> = [
 export type ClickClassification = {
 	ipHash: string;
 	isBot: boolean;
-	botName: string | null;
 	isUnique: boolean;
 };
 
@@ -28,33 +27,29 @@ export async function classifyClick(input: {
 	userAgent: string | null;
 }) {
 	const ipHash = hashIp(input.ipAddress);
-	const botName = classifyBot(input.userAgent);
-	const isBot = Boolean(botName);
+	const isBot = isBotUserAgent(input.userAgent);
 	const isUnique = isBot ? false : await isUniqueHumanClick(input.articleId, ipHash, input.userAgent);
 
 	return {
 		ipHash,
 		isBot,
-		botName,
 		isUnique
 	} satisfies ClickClassification;
 }
 
 export function classifyRequest(input: { ipAddress: string; userAgent: string | null }) {
-	const botName = classifyBot(input.userAgent);
 	return {
 		ipHash: hashIp(input.ipAddress),
-		isBot: Boolean(botName),
-		botName
+		isBot: isBotUserAgent(input.userAgent)
 	};
 }
 
-export function classifyBot(userAgent: string | null) {
-	if (!userAgent) return null;
-	for (const [name, pattern] of BOT_PATTERNS) {
-		if (pattern.test(userAgent)) return name;
+export function isBotUserAgent(userAgent: string | null) {
+	if (!userAgent) return false;
+	for (const [, pattern] of BOT_PATTERNS) {
+		if (pattern.test(userAgent)) return true;
 	}
-	return null;
+	return false;
 }
 
 async function isUniqueHumanClick(articleId: number, ipHash: string, userAgent: string | null) {
@@ -67,7 +62,6 @@ async function isUniqueHumanClick(articleId: number, ipHash: string, userAgent: 
 				eq(clickEvents.articleId, articleId),
 				eq(clickEvents.ipHash, ipHash),
 				userAgent ? eq(clickEvents.userAgent, userAgent) : isNull(clickEvents.userAgent),
-				eq(clickEvents.isBot, false),
 				gte(clickEvents.createdAt, since)
 			)
 		)

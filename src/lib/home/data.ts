@@ -20,6 +20,9 @@ export type Article = {
 	sourceName: string;
 	publishedAt: string;
 	clicks: number;
+	deliveryMode?: 'organic' | 'paid' | 'exchange';
+	surfaceKey?: 'home' | 'top' | 'category' | 'source' | 'source_category';
+	overallScore?: number;
 };
 
 export type Weather = {

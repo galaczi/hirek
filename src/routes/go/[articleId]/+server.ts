@@ -1,10 +1,13 @@
 import { eq, sql } from 'drizzle-orm';
 import { error, redirect, type RequestHandler } from '@sveltejs/kit';
+import { resolveBillableClick } from '$lib/server/billing/wallet';
 import { db } from '$lib/server/db';
 import { articleCategories, articles, clickEvents, sources } from '$lib/server/db/schema';
 import { classifyClick } from '$lib/server/articles/click-tracking';
+import { incrementSourceSurfaceStats } from '$lib/server/articles/stats';
 import { buildTrackedUrl, getArticleUtm } from '$lib/server/articles/utm';
 import { normalizeTrackingMetadata } from '$lib/server/validation/input';
+import { isAcquisitionMode, isPublicSurface, type AcquisitionMode, type PublicSurface } from '$lib/source-acquisition';
 
 export const GET: RequestHandler = async ({ params, request, getClientAddress }) => {
 	const articleId = Number(params.articleId);
@@ -37,32 +40,59 @@ export const GET: RequestHandler = async ({ params, request, getClientAddress })
 		userAgent: request.headers.get('user-agent')
 	});
 	const { referrer, userAgent } = metadata.ok ? metadata.data : { referrer: null, userAgent: null };
+	const requestedSurface = request.url ? new URL(request.url).searchParams.get('surface') : null;
+	const requestedMode = request.url ? new URL(request.url).searchParams.get('mode') : null;
+	const surface: PublicSurface | null = isPublicSurface(requestedSurface) ? requestedSurface : null;
+	const mode: AcquisitionMode = isAcquisitionMode(requestedMode) ? requestedMode : 'organic';
 	const click = await classifyClick({
 		articleId: article.id,
 		ipAddress: getClientAddress(),
 		userAgent
 	});
+
+	if (click.isBot) {
+		redirect(302, buildTrackedUrl(article.canonicalUrl, article.id, article));
+	}
+
 	const utm = getArticleUtm(article.id, article);
+	const billing = await resolveBillableClick({
+		sourceId: article.sourceId,
+		articleId: article.id,
+		surface,
+		requestedMode: mode,
+		isUnique: click.isUnique
+	});
 
 	await db.insert(clickEvents).values({
 		articleId: article.id,
 		sourceId: article.sourceId,
 		categoryId: primaryCategory?.categoryId ?? null,
 		referrer,
+		surface,
+		acquisitionMode: billing.acquisitionMode,
 		userAgent,
 		ipHash: click.ipHash,
 		utmCampaign: utm.campaign,
 		utmContent: utm.content,
-		isBot: click.isBot,
-		botName: click.botName,
+		chargeAmount: billing.chargeAmount,
 		isUnique: click.isUnique
 	});
 
-	if (!click.isBot) {
-		await db
-			.update(articles)
-			.set({ clickScore: sql`${articles.clickScore} + 1`, updatedAt: new Date() })
-			.where(eq(articles.id, article.id));
+	await db
+		.update(articles)
+		.set({ clickScore: sql`${articles.clickScore} + 1`, updatedAt: new Date() })
+		.where(eq(articles.id, article.id));
+
+	if (surface) {
+		await incrementSourceSurfaceStats([
+			{
+				sourceId: article.sourceId,
+				surface,
+				clicks: 1,
+				uniqueClicks: click.isUnique ? 1 : 0,
+				spendAmount: billing.chargeAmount
+			}
+		]);
 	}
 
 	redirect(302, buildTrackedUrl(article.canonicalUrl, article.id, article));

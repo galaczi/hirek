@@ -5,6 +5,7 @@ import { requireAdmin } from '$lib/server/admin/auth';
 import { db } from '$lib/server/db';
 import { articles, clickEvents, sourceFeeds, sources } from '$lib/server/db/schema';
 import { seedSources } from '$lib/server/ingestion/seed-data';
+import { validateSourceCommercialInput } from '$lib/server/validation/input';
 
 const SOURCE_STATUSES = new Set([
 	'ingesting',
@@ -14,9 +15,6 @@ const SOURCE_STATUSES = new Set([
 	'pending',
 	'disabled'
 ]);
-const PARTNER_PACKAGES = new Set(['free', 'partner', 'growth']);
-const PARTNER_STATUSES = new Set(['none', 'trial', 'active', 'paused', 'cancelled']);
-
 export const load: PageServerLoad = async (event) => {
 	requireAdmin(event);
 
@@ -96,6 +94,7 @@ export const load: PageServerLoad = async (event) => {
 				statusNote: sources.statusNote,
 				partnerPackage: sources.partnerPackage,
 				partnerStatus: sources.partnerStatus,
+				exchangeStatus: sources.exchangeStatus,
 				trafficTarget: sources.trafficTarget,
 				feedCount: sql<number>`count(${sourceFeeds.id})::int`,
 				activeFeedCount: sql<number>`count(${sourceFeeds.id}) FILTER (WHERE ${sourceFeeds.status} = 'active')::int`,
@@ -125,6 +124,7 @@ export const load: PageServerLoad = async (event) => {
 				sources.statusNote,
 				sources.partnerPackage,
 				sources.partnerStatus,
+				sources.exchangeStatus,
 				sources.trafficTarget
 			)
 			.orderBy(
@@ -162,6 +162,7 @@ export const load: PageServerLoad = async (event) => {
 			statusNote: row.statusNote,
 			partnerPackage: row.partnerPackage,
 			partnerStatus: row.partnerStatus,
+			exchangeStatus: row.exchangeStatus,
 			trafficTarget: Number(row.trafficTarget),
 			feedCount: Number(row.feedCount),
 			activeFeedCount: Number(row.activeFeedCount),
@@ -179,24 +180,39 @@ export const actions: Actions = {
 		const form = await event.request.formData();
 		const sourceId = Number(form.get('sourceId'));
 		const status = String(form.get('status') ?? '');
-		const partnerPackage = String(form.get('partnerPackage') ?? '');
-		const partnerStatus = String(form.get('partnerStatus') ?? '');
-		const trafficTarget = Math.max(0, Math.floor(Number(form.get('trafficTarget') ?? 0) || 0));
 		const statusNote = String(form.get('statusNote') ?? '').trim() || null;
 
 		if (!Number.isInteger(sourceId)) return fail(400, { error: 'Invalid source.' });
+
+		const [source] = await db
+			.select({ approvalStatus: sources.approvalStatus })
+			.from(sources)
+			.where(eq(sources.id, sourceId))
+			.limit(1);
+
 		if (!SOURCE_STATUSES.has(status)) return fail(400, { error: 'Invalid source status.' });
-		if (!PARTNER_PACKAGES.has(partnerPackage)) return fail(400, { error: 'Invalid partner package.' });
-		if (!PARTNER_STATUSES.has(partnerStatus)) return fail(400, { error: 'Invalid partner status.' });
+		if (!source) return fail(404, { error: 'Source not found.' });
+
+		const validation = validateSourceCommercialInput({
+			partnerPackage: form.get('partnerPackage'),
+			partnerStatus: form.get('partnerStatus'),
+			exchangeStatus: form.get('exchangeStatus'),
+			trafficTarget: form.get('trafficTarget'),
+			approvalStatus: source.approvalStatus
+		});
+		if (!validation.ok) {
+			return fail(400, { error: validation.summary || 'Invalid commercial settings.' });
+		}
 
 		await db
 			.update(sources)
 			.set({
 				status,
 				statusNote,
-				partnerPackage,
-				partnerStatus,
-				trafficTarget,
+				partnerPackage: validation.data.partnerPackage,
+				partnerStatus: validation.data.partnerStatus,
+				exchangeStatus: validation.data.exchangeStatus,
+				trafficTarget: validation.data.trafficTarget,
 				updatedAt: new Date()
 			})
 			.where(eq(sources.id, sourceId));

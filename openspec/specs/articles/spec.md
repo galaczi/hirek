@@ -8,16 +8,26 @@ Articles are the public news items shown across the main feed, source pages, cat
 
 ### Requirement: Active Article Listing
 
-The system SHALL list only active articles in public article streams.
+The system SHALL list only active retained articles in public article streams.
 
 #### Scenario: Public feed excludes inactive articles
 
 - **WHEN** a public article list is loaded
 - **THEN** articles with `active = false` are excluded
 
-#### Scenario: Default ordering favors freshness
+#### Scenario: Expired articles are excluded
 
-- **WHEN** a public article list is loaded without a top-order request
+- **WHEN** a public article list is loaded
+- **THEN** articles older than the 90-day retention window are excluded
+
+#### Scenario: Discovery ordering uses visibility score
+
+- **WHEN** a shared discovery article list is loaded
+- **THEN** articles are ordered by SQL-computed visibility score and then publication time descending
+
+#### Scenario: Source archive ordering favors chronology
+
+- **WHEN** a source or source-category article list is loaded
 - **THEN** articles are ordered by `published_at` descending and then `click_score` descending
 
 ### Requirement: Source And Category Filters
@@ -42,4 +52,3 @@ The system SHALL expose public source pages only for sources that are not disabl
 
 - **WHEN** a source has status `disabled`
 - **THEN** the public source lookup returns no source
-

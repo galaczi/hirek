@@ -1,8 +1,10 @@
 import { error, json, type RequestHandler } from '@sveltejs/kit';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray } from 'drizzle-orm';
 import { classifyRequest } from '$lib/server/articles/click-tracking';
+import { incrementSourceSurfaceStats, retentionCutoff } from '$lib/server/articles/stats';
 import { db } from '$lib/server/db';
-import { articleCategories, articles, impressionEvents } from '$lib/server/db/schema';
+import { articles } from '$lib/server/db/schema';
+import { classifyPublicSurface } from '$lib/source-acquisition';
 import { normalizeImpressionPayload } from '$lib/server/validation/input';
 
 type ImpressionPayload = {
@@ -19,37 +21,34 @@ export const POST: RequestHandler = async ({ request, getClientAddress }) => {
 		userAgent: request.headers.get('user-agent')
 	});
 	if (!normalized.ok) error(400, 'No article ids provided.');
-	const { articleIds, pagePath, referrer, userAgent } = normalized.data;
-	const rows = await db
-		.select({
-			id: articles.id,
-			sourceId: articles.sourceId,
-			categoryId: sql<number | null>`(array_remove(array_agg(${articleCategories.categoryId}), NULL))[1]`
-		})
-		.from(articles)
-		.leftJoin(articleCategories, eq(articleCategories.articleId, articles.id))
-		.where(and(eq(articles.active, true), inArray(articles.id, articleIds)))
-		.groupBy(articles.id, articles.sourceId);
-
-	if (rows.length === 0) return json({ ok: true, inserted: 0 });
-
+	const { articleIds, pagePath, userAgent } = normalized.data;
+	const surface = classifyPublicSurface(pagePath ?? '/');
 	const traffic = classifyRequest({
 		ipAddress: getClientAddress(),
 		userAgent
 	});
+	if (traffic.isBot) return json({ ok: true, inserted: 0 });
 
-	await db.insert(impressionEvents).values(
-		rows.map((row) => ({
-			articleId: row.id,
-			sourceId: row.sourceId,
-			categoryId: row.categoryId,
-			pagePath,
-			referrer,
-			userAgent,
-			ipHash: traffic.ipHash,
-			isBot: traffic.isBot,
-			botName: traffic.botName
-		}))
+	const rows = await db
+		.select({
+			id: articles.id,
+			sourceId: articles.sourceId
+		})
+		.from(articles)
+		.where(
+			and(
+				eq(articles.active, true),
+				gte(articles.publishedAt, retentionCutoff()),
+				inArray(articles.id, articleIds)
+			)
+		);
+
+	if (rows.length === 0) return json({ ok: true, inserted: 0 });
+
+	const counts = new Map<number, number>();
+	for (const row of rows) counts.set(row.sourceId, (counts.get(row.sourceId) ?? 0) + 1);
+	await incrementSourceSurfaceStats(
+		Array.from(counts, ([sourceId, impressions]) => ({ sourceId, surface, impressions }))
 	);
 
 	return json({ ok: true, inserted: rows.length });

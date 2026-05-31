@@ -1,4 +1,12 @@
 <script lang="ts">
+	import {
+		EXCHANGE_STATUS_VALUES,
+		PARTNER_PACKAGE_VALUES,
+		PARTNER_STATUS_VALUES,
+		exchangeStatusLabels,
+		partnerPackageLabels,
+		partnerStatusLabels
+	} from '$lib/source-commercial';
 	import type { PageProps } from './$types';
 	import InternalMetricCard from '$lib/components/internal/InternalMetricCard.svelte';
 	import InternalSectionHeader from '$lib/components/internal/InternalSectionHeader.svelte';
@@ -7,8 +15,6 @@
 	let { data, form }: PageProps = $props();
 
 	const sourceStatuses = ['ingesting', 'needs_rss', 'needs_adapter', 'blocked', 'pending', 'disabled'];
-	const partnerPackages = ['free', 'partner', 'growth'];
-	const partnerStatuses = ['none', 'trial', 'active', 'paused', 'cancelled'];
 	const approvalStatusLabels: Record<string, string> = {
 		pending: 'Jóváhagyásra vár',
 		approved: 'Jóváhagyott',
@@ -22,19 +28,6 @@
 		pending: 'Függőben',
 		disabled: 'Kikapcsolva'
 	};
-	const partnerPackageLabels: Record<string, string> = {
-		free: 'Ingyenes',
-		partner: 'Partner',
-		growth: 'Növekedési'
-	};
-	const partnerStatusLabels: Record<string, string> = {
-		none: 'Nincs',
-		trial: 'Próbaidőszak',
-		active: 'Aktív',
-		paused: 'Szüneteltetve',
-		cancelled: 'Lemondva'
-	};
-
 	const launchPercent = $derived(
 		data.launchGate.expectedSources
 			? Math.round((data.launchGate.liveSources / data.launchGate.expectedSources) * 100)
@@ -176,17 +169,26 @@
 					<label>
 						<span>Csomag</span>
 						<select name="partnerPackage">
-							{#each partnerPackages as option (option)}
+							{#each PARTNER_PACKAGE_VALUES as option (option)}
 								<option value={option} selected={source.partnerPackage === option}>{partnerPackageLabels[option]}</option>
 							{/each}
 						</select>
 					</label>
 
 					<label>
-						<span>Partner</span>
+						<span>Kereskedelmi státusz</span>
 						<select name="partnerStatus">
-							{#each partnerStatuses as option (option)}
+							{#each source.approvalStatus === 'approved' ? PARTNER_STATUS_VALUES : ['none'] as option (option)}
 								<option value={option} selected={source.partnerStatus === option}>{partnerStatusLabels[option]}</option>
+							{/each}
+						</select>
+					</label>
+
+					<label>
+						<span>Csereprogram</span>
+						<select name="exchangeStatus">
+							{#each source.approvalStatus === 'approved' ? EXCHANGE_STATUS_VALUES : ['none', 'eligible'] as option (option)}
+								<option value={option} selected={source.exchangeStatus === option}>{exchangeStatusLabels[option]}</option>
 							{/each}
 						</select>
 					</label>

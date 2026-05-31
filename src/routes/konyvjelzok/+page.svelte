@@ -34,6 +34,14 @@
 		bookmarks = bookmarks.filter((article) => article.id !== articleId);
 		localStorage.setItem(BOOKMARK_STORAGE_KEY, JSON.stringify(bookmarks));
 	}
+
+	function articleHref(article: Article) {
+		const params = new URLSearchParams();
+		if (article.surfaceKey) params.set('surface', article.surfaceKey);
+		if (article.deliveryMode && article.deliveryMode !== 'organic') params.set('mode', article.deliveryMode);
+		const query = params.toString();
+		return query ? `/go/${article.id}?${query}` : `/go/${article.id}`;
+	}
 </script>
 
 <svelte:head>
@@ -62,7 +70,7 @@
 					<article class="news-item">
 						<div class="news-item-left">
 							<span class="news-time">{formatTime(article.publishedAt)}</span>
-							<a class="news-title" href={`/go/${article.id}`} target="_blank" rel="noopener">{article.title}</a>
+							<a class="news-title" href={articleHref(article)} target="_blank" rel="noopener">{article.title}</a>
 						</div>
 						<div class="news-item-right">
 							<a class="source-badge" href={`/${article.source}/`}>{article.sourceName}</a>

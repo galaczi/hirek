@@ -1,4 +1,24 @@
 import { type as ark } from 'arktype';
+import {
+	DEFAULT_EXCHANGE_STATUS,
+	DEFAULT_PARTNER_PACKAGE,
+	DEFAULT_PARTNER_STATUS,
+	isExchangeStatus,
+	isPartnerPackage,
+	isPartnerStatus,
+	type ExchangeStatus,
+	type PartnerPackage,
+	type PartnerStatus
+} from '../../source-commercial.ts';
+import {
+	DEFAULT_TRUST_SCORE,
+	isSourceBoostStatus,
+	normalizeMoneyAmount,
+	normalizeSurfaceTargets,
+	normalizeTrustScore,
+	type PublicSurface,
+	type SourceBoostStatus
+} from '../../source-acquisition.ts';
 
 export type ValidationIssue = {
 	path: string;
@@ -103,6 +123,25 @@ export type UrlPatternInput = typeof urlPatternInputSchema.infer;
 export type UtmSettingsInput = typeof utmSettingsSchema.infer;
 export type TrackingMetadataInput = typeof trackingMetadataSchema.infer;
 export type ImpressionPayloadInput = typeof impressionPayloadSchema.infer;
+export type SourceCommercialInput = {
+	partnerPackage: PartnerPackage;
+	partnerStatus: PartnerStatus;
+	exchangeStatus: ExchangeStatus;
+	trafficTarget: number;
+};
+export type SourceAcquisitionInput = {
+	trustScore: number;
+	boostStatus: SourceBoostStatus;
+	boostRouteTargets: PublicSurface[];
+	maxCpc: number;
+	dailySpendCap: number;
+	exchangeCreditBalance: number;
+};
+export type WalletTopUpInput = {
+	amount: number;
+	billingName: string;
+	billingEmail: string;
+};
 
 export function normalizeEmail(value: unknown) {
 	return asTrimmedString(value).toLowerCase();
@@ -179,6 +218,39 @@ export function normalizeUrlPattern(value: unknown) {
 
 export function normalizeUtmValue(value: unknown) {
 	return asTrimmedString(value);
+}
+
+export function normalizePartnerPackage(value: unknown) {
+	return asTrimmedString(value).toLowerCase();
+}
+
+export function normalizePartnerStatus(value: unknown) {
+	return asTrimmedString(value).toLowerCase();
+}
+
+export function normalizeExchangeStatus(value: unknown) {
+	return asTrimmedString(value).toLowerCase();
+}
+
+export function normalizeTrafficTarget(value: unknown) {
+	const clean = String(value ?? '').trim();
+	if (!clean) return 0;
+
+	const parsed = Number(clean);
+	if (!Number.isFinite(parsed)) return Number.NaN;
+	return Math.max(0, Math.floor(parsed));
+}
+
+export function normalizeBoostStatus(value: unknown) {
+	return asTrimmedString(value).toLowerCase();
+}
+
+export function normalizeBoostRouteTargets(value: unknown) {
+	return normalizeSurfaceTargets(value);
+}
+
+export function normalizeBillingName(value: unknown) {
+	return normalizeDisplayText(value);
 }
 
 export function normalizeTrackingMetadata(input: {
@@ -322,6 +394,178 @@ export function validateUtmSettingsInput(input: {
 		utmMedium: 'utm_medium szükséges.',
 		utmCampaign: 'utm_campaign szükséges.'
 	});
+}
+
+export function validateSourceCommercialInput(input: {
+	partnerPackage?: unknown;
+	partnerStatus?: unknown;
+	exchangeStatus?: unknown;
+	trafficTarget?: unknown;
+	approvalStatus?: string | null;
+}) {
+	const normalized = {
+		partnerPackage: normalizePartnerPackage(input.partnerPackage),
+		partnerStatus: normalizePartnerStatus(input.partnerStatus),
+		exchangeStatus: normalizeExchangeStatus(input.exchangeStatus),
+		trafficTarget: normalizeTrafficTarget(input.trafficTarget)
+	};
+	const issues: ValidationIssue[] = [];
+
+	if (!normalized.partnerPackage) {
+		issues.push({ path: 'partnerPackage', message: 'Partner csomag szükséges.' });
+	} else if (!isPartnerPackage(normalized.partnerPackage)) {
+		issues.push({ path: 'partnerPackage', message: 'Érvénytelen partner csomag.' });
+	}
+
+	if (!normalized.partnerStatus) {
+		issues.push({ path: 'partnerStatus', message: 'Kereskedelmi állapot szükséges.' });
+	} else if (!isPartnerStatus(normalized.partnerStatus)) {
+		issues.push({ path: 'partnerStatus', message: 'Érvénytelen kereskedelmi állapot.' });
+	}
+
+	if (!normalized.exchangeStatus) {
+		issues.push({ path: 'exchangeStatus', message: 'Csereprogram állapot szükséges.' });
+	} else if (!isExchangeStatus(normalized.exchangeStatus)) {
+		issues.push({ path: 'exchangeStatus', message: 'Érvénytelen csereprogram állapot.' });
+	}
+
+	if (Number.isNaN(normalized.trafficTarget)) {
+		issues.push({ path: 'trafficTarget', message: 'A célforgalom csak nem negatív szám lehet.' });
+	}
+
+	if (input.approvalStatus !== 'approved') {
+		if (normalized.partnerStatus && normalized.partnerStatus !== DEFAULT_PARTNER_STATUS) {
+			issues.push({
+				path: 'partnerStatus',
+				message: 'A kereskedelmi állapot csak jóváhagyott forrásnál lehet aktív.'
+			});
+		}
+
+		if (normalized.exchangeStatus === 'active') {
+			issues.push({
+				path: 'exchangeStatus',
+				message: 'Aktív csereprogram csak jóváhagyott forrásnál állítható be.'
+			});
+		}
+	}
+
+	if (issues.length > 0) return createFailure(issues);
+
+	return {
+		ok: true,
+		data: {
+			partnerPackage: isPartnerPackage(normalized.partnerPackage)
+				? normalized.partnerPackage
+				: DEFAULT_PARTNER_PACKAGE,
+			partnerStatus: isPartnerStatus(normalized.partnerStatus)
+				? normalized.partnerStatus
+				: DEFAULT_PARTNER_STATUS,
+			exchangeStatus: isExchangeStatus(normalized.exchangeStatus)
+				? normalized.exchangeStatus
+				: DEFAULT_EXCHANGE_STATUS,
+			trafficTarget: normalized.trafficTarget
+		} satisfies SourceCommercialInput
+	} satisfies ValidationSuccess<SourceCommercialInput>;
+}
+
+export function validateSourceAcquisitionInput(input: {
+	trustScore?: unknown;
+	boostStatus?: unknown;
+	boostRouteTargets?: unknown;
+	maxCpc?: unknown;
+	dailySpendCap?: unknown;
+	exchangeCreditBalance?: unknown;
+	approvalStatus?: string | null;
+}) {
+	const normalized = {
+		trustScore: normalizeTrustScore(input.trustScore),
+		boostStatus: normalizeBoostStatus(input.boostStatus),
+		boostRouteTargets: normalizeBoostRouteTargets(input.boostRouteTargets),
+		maxCpc: normalizeMoneyAmount(input.maxCpc),
+		dailySpendCap: normalizeMoneyAmount(input.dailySpendCap),
+		exchangeCreditBalance: normalizeMoneyAmount(input.exchangeCreditBalance)
+	};
+	const issues: ValidationIssue[] = [];
+
+	if (Number.isNaN(normalized.trustScore)) {
+		issues.push({ path: 'trustScore', message: 'A bizalmi pontszám 0 és 10 közötti szám lehet.' });
+	}
+	if (!normalized.boostStatus) {
+		issues.push({ path: 'boostStatus', message: 'Boost állapot szükséges.' });
+	} else if (!isSourceBoostStatus(normalized.boostStatus)) {
+		issues.push({ path: 'boostStatus', message: 'Érvénytelen boost állapot.' });
+	}
+	if (normalized.boostRouteTargets.length === 0) {
+		issues.push({ path: 'boostRouteTargets', message: 'Legalább egy megjelenési felület szükséges.' });
+	}
+	if (Number.isNaN(normalized.maxCpc)) {
+		issues.push({ path: 'maxCpc', message: 'A max CPC csak nem negatív szám lehet.' });
+	}
+	if (Number.isNaN(normalized.dailySpendCap)) {
+		issues.push({ path: 'dailySpendCap', message: 'A napi limit csak nem negatív szám lehet.' });
+	}
+	if (Number.isNaN(normalized.exchangeCreditBalance)) {
+		issues.push({
+			path: 'exchangeCreditBalance',
+			message: 'A csereprogram kredit csak nem negatív szám lehet.'
+		});
+	}
+
+	if (input.approvalStatus !== 'approved' && normalized.boostStatus === 'active') {
+		issues.push({
+			path: 'boostStatus',
+			message: 'Boost csak jóváhagyott forrásnál lehet aktív.'
+		});
+	}
+
+	if (issues.length > 0) return createFailure(issues);
+
+	return {
+		ok: true,
+		data: {
+			trustScore: Number.isNaN(normalized.trustScore) ? DEFAULT_TRUST_SCORE : normalized.trustScore,
+			boostStatus: isSourceBoostStatus(normalized.boostStatus)
+				? normalized.boostStatus
+				: 'paused',
+			boostRouteTargets: normalized.boostRouteTargets,
+			maxCpc: normalized.maxCpc,
+			dailySpendCap: normalized.dailySpendCap,
+			exchangeCreditBalance: normalized.exchangeCreditBalance
+		} satisfies SourceAcquisitionInput
+	} satisfies ValidationSuccess<SourceAcquisitionInput>;
+}
+
+export function validateWalletTopUpInput(input: {
+	amount?: unknown;
+	billingName?: unknown;
+	billingEmail?: unknown;
+}) {
+	const normalized = {
+		amount: normalizeMoneyAmount(input.amount),
+		billingName: normalizeBillingName(input.billingName),
+		billingEmail: normalizeEmail(input.billingEmail)
+	};
+	const issues: ValidationIssue[] = [];
+
+	if (Number.isNaN(normalized.amount) || normalized.amount <= 0) {
+		issues.push({ path: 'amount', message: 'A feltöltés összege pozitív szám legyen.' });
+	}
+	if (!normalized.billingName) {
+		issues.push({ path: 'billingName', message: 'Számlázási név szükséges.' });
+	}
+	const emailResult = validateSchema(emailSchema, normalized.billingEmail);
+	if (!normalized.billingEmail) {
+		issues.push({ path: 'billingEmail', message: 'Számlázási email szükséges.' });
+	} else if (!emailResult.ok) {
+		issues.push({ path: 'billingEmail', message: 'Érvényes számlázási email szükséges.' });
+	}
+
+	if (issues.length > 0) return createFailure(issues);
+
+	return {
+		ok: true,
+		data: normalized satisfies WalletTopUpInput
+	} satisfies ValidationSuccess<WalletTopUpInput>;
 }
 
 function validateRequiredAndSchema<T extends Record<string, string>>(

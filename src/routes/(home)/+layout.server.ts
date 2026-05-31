@@ -1,12 +1,15 @@
 import { error, redirect } from '@sveltejs/kit';
-import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, ne, sql } from 'drizzle-orm';
 import type { LayoutServerLoad } from './$types';
 import { db } from '$lib/server/db';
 import { articleCategories, articles, categories, sources } from '$lib/server/db/schema';
 import type { Article, Category, Publisher } from '$lib/home/data';
 import { getCategoryBySlug, getSourceBySlug } from '$lib/server/articles/list';
+import { getMarketplaceArticles } from '$lib/server/articles/marketplace';
+import { retentionCutoff } from '$lib/server/articles/stats';
 import { searchArticles } from '$lib/server/search';
 import type { SearchFilters, SearchResponse, SearchResult } from '$lib/server/search/types';
+import type { PublicSurface } from '$lib/source-acquisition';
 
 type CategoryRow = Category & {
 	count: string | number;
@@ -40,10 +43,17 @@ export const load: LayoutServerLoad = async ({ params, url }) => {
 	}).format(new Date());
 
 	try {
-		const shouldSearch = Boolean(q || filters.category || filters.source || filters.time);
+			const shouldSearch = Boolean(q);
+		const streamSurface = getSurfaceForFilters(filters);
 		const [streamRows, topRows, categoryRows, sourceRows, totalRows, search] = await Promise.all([
-			getArticles('fresh', 80, filters),
-			getArticles('top', 24),
+			getMarketplaceArticles({
+				surface: streamSurface,
+				limit: 80,
+				category: filters.category,
+				source: filters.source,
+				since: getTimeBoundary(filters.time)
+			}),
+			getMarketplaceArticles({ surface: 'top', limit: 24 }),
 			getCategories(),
 			getSources(),
 			getTotalArticles(),
@@ -55,11 +65,11 @@ export const load: LayoutServerLoad = async ({ params, url }) => {
 
 		return {
 			todayLabel,
-			articles: streamRows.map(toArticle),
+			articles: streamRows,
 			streamArticles: searchResponse
 				? searchResponse.results.map(toArticleFromSearchResult)
-				: streamRows.map(toArticle),
-			topArticles: topRows.map(toArticle),
+				: streamRows,
+			topArticles: topRows,
 			categories: [
 				{ slug: 'all', name: 'Összes hír', count: Number(totalRows.at(0)?.count ?? 0) },
 				...categoryRows.map((category) => ({ ...category, count: Number(category.count) }))
@@ -119,6 +129,13 @@ async function getRouteFilters(params: Partial<Record<string, string>>, url: URL
 	return {};
 }
 
+function getSurfaceForFilters(filters: HomeFilters): PublicSurface {
+	if (filters.source && filters.category) return 'source_category';
+	if (filters.source) return 'source';
+	if (filters.category) return 'category';
+	return 'home';
+}
+
 function redirectLegacyHomeFilters(url: URL, isSearchRoute: boolean) {
 	if (isSearchRoute) return;
 	const source = cleanFilter(url.searchParams.get('source'));
@@ -160,61 +177,6 @@ function cleanFilter(value: string | null) {
 	return clean && clean !== 'all' ? clean : undefined;
 }
 
-async function getArticles(orderBy: 'fresh' | 'top', limit: number, filters: HomeFilters = {}) {
-	const conditions = [eq(articles.active, true)];
-	if (filters.source) conditions.push(eq(sources.slug, filters.source));
-	if (filters.category) {
-		conditions.push(
-			inArray(
-				articles.id,
-				db
-					.select({ articleId: articleCategories.articleId })
-					.from(articleCategories)
-					.innerJoin(categories, eq(categories.id, articleCategories.categoryId))
-					.where(eq(categories.slug, filters.category))
-			)
-		);
-	}
-
-	const since = getTimeBoundary(filters.time);
-	if (since) conditions.push(sql`${articles.publishedAt} >= ${since.toISOString()}::timestamptz`);
-
-	return db
-		.select({
-			id: articles.id,
-			title: articles.title,
-			excerpt: articles.excerpt,
-			sourceSlug: sources.slug,
-			sourceName: sources.name,
-			categorySlug: sql<string | null>`(array_remove(array_agg(DISTINCT ${categories.slug}), NULL))[1]`,
-			categoryName: sql<string | null>`(array_remove(array_agg(DISTINCT ${categories.name}), NULL))[1]`,
-			categorySlugs: sql<string[]>`array_remove(array_agg(DISTINCT ${categories.slug}), NULL)`,
-			publishedAt: articles.publishedAt,
-			clickScore: articles.clickScore
-		})
-		.from(articles)
-		.innerJoin(sources, eq(sources.id, articles.sourceId))
-		.leftJoin(articleCategories, eq(articleCategories.articleId, articles.id))
-		.leftJoin(categories, eq(categories.id, articleCategories.categoryId))
-		.where(and(...conditions))
-		.groupBy(
-			articles.id,
-			articles.title,
-			articles.excerpt,
-			articles.publishedAt,
-			articles.clickScore,
-			sources.id,
-			sources.slug,
-			sources.name
-		)
-		.orderBy(
-			...(orderBy === 'top'
-				? [desc(articles.clickScore), desc(articles.publishedAt)]
-				: [desc(articles.publishedAt), desc(articles.clickScore)])
-		)
-		.limit(limit);
-}
-
 function getTimeBoundary(time: HomeFilters['time']) {
 	if (!time) return null;
 
@@ -237,7 +199,14 @@ async function getCategories() {
 		})
 		.from(categories)
 		.leftJoin(articleCategories, eq(articleCategories.categoryId, categories.id))
-		.leftJoin(articles, and(eq(articles.id, articleCategories.articleId), eq(articles.active, true)))
+		.leftJoin(
+			articles,
+			and(
+				eq(articles.id, articleCategories.articleId),
+				eq(articles.active, true),
+				gte(articles.publishedAt, retentionCutoff())
+			)
+		)
 		.groupBy(categories.id, categories.slug, categories.name)
 		.orderBy(asc(categories.name));
 }
@@ -260,33 +229,7 @@ async function getTotalArticles() {
 			count: sql<number>`count(*)::int`
 		})
 		.from(articles)
-		.where(eq(articles.active, true));
-}
-
-function toArticle(row: {
-	id: number;
-	title: string;
-	excerpt: string | null;
-	sourceSlug: string;
-	sourceName: string;
-	categorySlug: string | null;
-	categoryName: string | null;
-	categorySlugs: string[] | null;
-	publishedAt: Date | string;
-	clickScore: number;
-}): Article {
-	return {
-		id: row.id,
-		title: row.title,
-		excerpt: row.excerpt,
-		category: row.categorySlug ?? 'uncategorized',
-		categoryName: row.categoryName ?? 'Egyéb',
-		categorySlugs: row.categorySlugs ?? [],
-		source: row.sourceSlug,
-		sourceName: row.sourceName,
-		publishedAt: toIsoString(row.publishedAt),
-		clicks: row.clickScore
-	};
+		.where(and(eq(articles.active, true), gte(articles.publishedAt, retentionCutoff())));
 }
 
 function toArticleFromSearchResult(result: SearchResult): Article {

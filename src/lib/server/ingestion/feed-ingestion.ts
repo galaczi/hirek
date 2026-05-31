@@ -13,6 +13,7 @@ import { configureArticleIndex, indexArticles } from '$lib/server/search/meili';
 import { inferCategorySlugs } from '$lib/server/categorization/rules';
 import { getCategorySlugsForUrl } from '$lib/server/categorization/url-rules';
 import { publishLiveArticles, type LiveArticleEvent } from '$lib/server/live/articles';
+import { retentionCutoff } from '$lib/server/articles/stats';
 import { parseFeed } from './rss';
 
 type UpsertedArticle = {
@@ -64,6 +65,7 @@ export async function ingestFeedById(feedId: number) {
 	const items = parseFeed(xml).slice(0, 80);
 	const documents: ArticleSearchDocument[] = [];
 	const liveArticles: LiveArticleEvent[] = [];
+	const cutoff = retentionCutoff();
 
 	for (const item of items) {
 		const canonicalUrl = canonicalizeUrl(item.url, feed.feedUrl);
@@ -105,13 +107,16 @@ export async function ingestFeedById(feedId: number) {
 		const appliedCategories = await applyArticleCategories(article, feed, canonicalUrl);
 		const categorySlugs = appliedCategories.map((category) => category.slug);
 
-		documents.push(toSearchDocument(article, {
-			sourceName: feed.sourceName,
-			sourceSlug: feed.sourceSlug,
-			categorySlugs
-		}));
+		const retained = new Date(article.publishedAt).getTime() >= cutoff.getTime();
+		if (retained) {
+			documents.push(toSearchDocument(article, {
+				sourceName: feed.sourceName,
+				sourceSlug: feed.sourceSlug,
+				categorySlugs
+			}));
+		}
 
-		if (article.inserted) {
+		if (article.inserted && retained) {
 			liveArticles.push(toLiveArticle(article, {
 				sourceName: feed.sourceName,
 				sourceSlug: feed.sourceSlug,

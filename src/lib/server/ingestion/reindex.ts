@@ -1,6 +1,7 @@
-import { desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { articleCategories, articles, categories, sources } from '$lib/server/db/schema';
+import { retentionCutoff } from '$lib/server/articles/stats';
 import { configureArticleIndex, indexArticles } from '$lib/server/search/meili';
 import type { ArticleSearchDocument } from '$lib/server/search/types';
 
@@ -21,7 +22,7 @@ export async function reindexArticles() {
 		.innerJoin(sources, eq(sources.id, articles.sourceId))
 		.leftJoin(articleCategories, eq(articleCategories.articleId, articles.id))
 		.leftJoin(categories, eq(categories.id, articleCategories.categoryId))
-		.where(eq(articles.active, true))
+		.where(and(eq(articles.active, true), gte(articles.publishedAt, retentionCutoff())))
 		.groupBy(
 			articles.id,
 			articles.title,

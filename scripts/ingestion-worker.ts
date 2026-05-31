@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 
 type IngestionModule = typeof import('$lib/server/ingestion');
+type RetentionModule = typeof import('$lib/server/articles/retention');
 
 const DEFAULT_FEED_LIMIT = 100;
 const DEFAULT_JOB_LIMIT = 10;
@@ -16,6 +17,8 @@ const jobLimit = readPositiveInteger('INGESTION_WORKER_JOB_LIMIT', DEFAULT_JOB_L
 const pollIntervalMs = readPositiveInteger('INGESTION_WORKER_POLL_MS', DEFAULT_POLL_INTERVAL_MS);
 const idleSleepMs = readPositiveInteger('INGESTION_WORKER_IDLE_MS', DEFAULT_IDLE_SLEEP_MS);
 const ingestion = (await import('$lib/server/ingestion')) as IngestionModule;
+const retention = (await import('$lib/server/articles/retention')) as RetentionModule;
+const retentionIntervalMs = readPositiveInteger('RETENTION_PRUNE_INTERVAL_MS', 24 * 60 * 60 * 1000);
 
 let stopping = false;
 process.on('SIGINT', stop);
@@ -29,12 +32,18 @@ if (once) {
 
 async function runForever() {
 	let nextEnqueueAt = 0;
+	let nextRetentionAt = 0;
 	console.log(
 		`Ingestion worker started. feedIntervalMs=${pollIntervalMs} feedLimit=${feedLimit} jobLimit=${jobLimit}`
 	);
 
 	while (!stopping) {
 		const now = Date.now();
+		if (now >= nextRetentionAt) {
+			await pruneRetention();
+			nextRetentionAt = now + retentionIntervalMs;
+		}
+
 		if (now >= nextEnqueueAt) {
 			await enqueueFeeds();
 			nextEnqueueAt = now + pollIntervalMs;
@@ -48,10 +57,20 @@ async function runForever() {
 }
 
 async function enqueueAndDrain() {
+	await pruneRetention();
 	await enqueueFeeds();
 	while (!stopping) {
 		const processed = await drainOnce();
 		if (processed === 0) break;
+	}
+}
+
+async function pruneRetention() {
+	try {
+		const result = await retention.pruneExpiredArticleInventory();
+		console.log(`Pruned ${result.deletedArticles} expired article(s).`);
+	} catch (error) {
+		console.error('Failed to prune expired inventory:', formatError(error));
 	}
 }
 

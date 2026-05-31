@@ -1,11 +1,12 @@
 import { and, desc, eq, sql, type SQL } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { articleCategories, articles, categories, sources } from '$lib/server/db/schema';
+import { retentionCutoff } from '$lib/server/articles/stats';
 import type { SearchFilters, SearchResponse, SearchResult } from './types';
 
 export async function searchWithPostgres(filters: SearchFilters): Promise<SearchResponse> {
 	const q = filters.q.trim();
-	const where: SQL[] = [eq(articles.active, true)];
+	const where: SQL[] = [eq(articles.active, true), sql`${articles.publishedAt} >= ${retentionCutoff().toISOString()}::timestamptz`];
 
 	if (filters.source) where.push(eq(sources.slug, filters.source));
 	if (filters.category) where.push(eq(categories.slug, filters.category));

@@ -3,36 +3,24 @@
 ## Purpose
 
 Public experience defines the shared public shell, homepage search behavior, live stream updates, and link-target rules across the public news surfaces.
-
 ## Requirements
+### Requirement: Shared Public Discovery Ranking
+The system SHALL rank shared discovery surfaces with the marketplace-aware visibility scorer.
 
-### Requirement: Shared Public Shell
+#### Scenario: Public list surface is loaded
+- **WHEN** a user loads the homepage, top list, category page, or time-filtered stream
+- **THEN** article ordering reflects editorial relevance plus trust-weighted paid or exchange boost contributions for eligible sources
 
-The system SHALL render the homepage and the dedicated public search page inside the same public site shell.
-
-#### Scenario: User opens the dedicated search page
-
-- **WHEN** a user loads `/kereses`
-- **THEN** the page uses the same public header and top-level navigation model as the homepage
-
-#### Scenario: Public search page is rendered
-
-- **WHEN** the dedicated search page is displayed
-- **THEN** it SHALL not inherit admin or dashboard presentation patterns
+#### Scenario: Source archive surface is loaded
+- **WHEN** a user loads a source page or source+category page
+- **THEN** retained active articles from that source are ordered by publication time descending
 
 ### Requirement: Public Link Target Behavior
+The system SHALL preserve the acquisition surface and selected delivery mode when redirecting outbound article clicks.
 
-The system SHALL keep internal site navigation in the current tab and open outbound article links in a new tab.
-
-#### Scenario: User follows an internal site link
-
-- **WHEN** a user clicks a public navigation link such as the logo or top menu
-- **THEN** the current tab navigates within the site
-
-#### Scenario: User opens an article
-
-- **WHEN** a user clicks a public article link
-- **THEN** the site opens the tracked outbound article in a new tab
+#### Scenario: User opens an article from a public list
+- **WHEN** a user clicks an outbound article on a public list surface
+- **THEN** the redirect request includes the originating surface and delivery mode so billing and reporting can attribute the click correctly
 
 ### Requirement: Homepage Search In Stream
 
@@ -66,3 +54,55 @@ The system SHALL auto-prepend matching live articles into the visible public str
 
 - **WHEN** a live article event satisfies the active source, category, time, and text-query constraints
 - **THEN** the article is prepended to the visible stream and the toast count is updated
+
+### Requirement: Public Stream Reader Controls
+The system SHALL expose compact reader controls in the shared public header that let users toggle article excerpts and adjust stream font size for homepage-style public streams.
+
+#### Scenario: User enables stream excerpts
+- **WHEN** a user enables the excerpt control from the shared public header
+- **THEN** each visible public-stream article with excerpt content shows that excerpt directly beneath the article link
+
+#### Scenario: User disables stream excerpts
+- **WHEN** a user disables the excerpt control from the shared public header
+- **THEN** visible public-stream articles hide their excerpt text without reloading the page
+
+#### Scenario: User changes stream font size
+- **WHEN** a user activates the header font increase or decrease control
+- **THEN** the visible public-stream typography updates immediately on the current route
+
+### Requirement: Tabbed Homepage Sidebar Navigation
+The system SHALL render the left sidebar's primary navigation widget as tabs for categories, sites, and a reserved trending area.
+
+#### Scenario: Public stream loads default sidebar tab
+- **WHEN** a user opens a homepage-style public route inside the shared public shell
+- **THEN** the first sidebar widget defaults to the `Rovatok` tab and shows category filters
+
+#### Scenario: User opens the sites tab
+- **WHEN** a user selects the `Oldalak` tab
+- **THEN** the widget shows the available site list and selecting a site applies the same public source filter used by the stream
+
+#### Scenario: Source navigation is not duplicated in the feed header
+- **WHEN** the `Oldalak` site list is available in the sidebar
+- **THEN** the center-column feed header does not render a duplicate publisher or source list
+
+#### Scenario: User opens the trending tab
+- **WHEN** a user selects the `Trending` tab
+- **THEN** the widget renders an empty placeholder state and does not yet populate trending content
+
+### Requirement: Dedicated Search Shell Parity
+The system SHALL render the dedicated public search route inside the shared public shell used by homepage-style public routes.
+
+#### Scenario: User opens dedicated search route
+- **WHEN** a user loads `/kereses`
+- **THEN** the page uses the same shared header, navigation, and public stream shell as the homepage
+
+### Requirement: Public Stream Seven-Day Filter
+The system SHALL support the `7d` time filter consistently across public homepage streams, dedicated public search, and live article matching.
+
+#### Scenario: User selects seven-day filter on a public stream
+- **WHEN** a public stream is filtered with `7d`
+- **THEN** only articles published within the last seven days remain visible
+
+#### Scenario: Live article is evaluated against seven-day filter
+- **WHEN** a live article event arrives while the active public stream filter is `7d`
+- **THEN** the event is inserted only if the article falls within the seven-day window and matches the rest of the active filters

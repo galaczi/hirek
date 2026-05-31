@@ -1,6 +1,13 @@
-import { and, count, desc, eq, gte, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, sql, type SQL } from 'drizzle-orm';
 import type { Actions, PageServerLoad } from './$types';
 import { requirePartnerAccess } from '$lib/server/admin/auth';
+import { createWalletTopUp } from '$lib/server/billing/wallet';
+import {
+	acquisitionModeLabels,
+	publicSurfaceLabels,
+	serializeSurfaceTargets
+} from '$lib/source-acquisition';
+import { getTrafficTargetProgress } from '$lib/source-commercial';
 import { db } from '$lib/server/db';
 import {
 	articleCategories,
@@ -8,6 +15,8 @@ import {
 	articles,
 	categories,
 	clickEvents,
+	sourceBillingInvoices,
+	sourceBillingLedger,
 	sourceFeeds,
 	sourceCategoryRules,
 	sources
@@ -20,6 +29,8 @@ import {
 	normalizeUrlPattern,
 	validateUrlPatternInput,
 	validateUtmSettingsInput,
+	validateWalletTopUpInput,
+	validateSourceAcquisitionInput,
 	type ValidationFailure
 } from '$lib/server/validation/input';
 
@@ -42,6 +53,13 @@ type TrafficSourceRow = {
 	unique_click_count: string | number;
 };
 
+type RoutePerformanceRow = {
+	surface: string | null;
+	acquisition_mode: string;
+	click_count: string | number;
+	spend_amount: string | number;
+};
+
 type AvailableSourceRow = {
 	id: number;
 	slug: string;
@@ -49,10 +67,13 @@ type AvailableSourceRow = {
 	domain: string;
 	approval_status: string;
 	partner_package: string;
+	partner_status: string;
+	exchange_status: string;
 	status: string;
 	article_count: string | number;
 	click_count: string | number;
 	unique_click_count: string | number;
+	traffic_target: string | number;
 	last_fetched_at: string | Date | null;
 };
 
@@ -64,8 +85,8 @@ export const load: PageServerLoad = async (event) => {
 	const reportDays = parseReportDays(event.url);
 	const reportSince = getReportSince(reportDays);
 	const reportSinceIso = reportSince.toISOString();
-	const topCategoryClickCountExpr = sql<number>`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isBot} = false)::int`;
-	const topCategoryUniqueClickCountExpr = sql<number>`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isBot} = false AND ${clickEvents.isUnique} = true)::int`;
+	const topCategoryClickCountExpr = sql<number>`count(${clickEvents.id})::int`;
+	const topCategoryUniqueClickCountExpr = sql<number>`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isUnique} = true)::int`;
 	const trafficLabelExpr = getTrafficSourceCase();
 
 	if (access.isAdmin && !scopedSourceId) {
@@ -78,6 +99,15 @@ export const load: PageServerLoad = async (event) => {
 						domain: sources.domain,
 						approvalStatus: sources.approvalStatus,
 						partnerPackage: sources.partnerPackage,
+						partnerStatus: sources.partnerStatus,
+						exchangeStatus: sources.exchangeStatus,
+						trustScore: sources.trustScore,
+						boostStatus: sources.boostStatus,
+						boostRouteTargets: sources.boostRouteTargets,
+						walletBalance: sources.walletBalance,
+						exchangeCreditBalance: sources.exchangeCreditBalance,
+						maxCpc: sources.maxCpc,
+						dailySpendCap: sources.dailySpendCap,
 						status: sources.status,
 						articleCount: sql<number>`(
 							SELECT count(*)::int
@@ -89,17 +119,16 @@ export const load: PageServerLoad = async (event) => {
 							SELECT count(*)::int
 							FROM ${clickEvents}
 							WHERE ${clickEvents.sourceId} = ${sources.id}
-								AND ${clickEvents.isBot} = false
 								AND ${clickEvents.createdAt} >= ${reportSince}
 						)`,
 						uniqueClickCount: sql<number>`(
 							SELECT count(*)::int
 							FROM ${clickEvents}
 							WHERE ${clickEvents.sourceId} = ${sources.id}
-								AND ${clickEvents.isBot} = false
 								AND ${clickEvents.isUnique} = true
 								AND ${clickEvents.createdAt} >= ${reportSince}
 						)`,
+						trafficTarget: sources.trafficTarget,
 						lastFetchedAt: sql<Date | string | null>`(
 							SELECT max(${sourceFeeds.lastFetchedAt})
 							FROM ${sourceFeeds}
@@ -127,19 +156,33 @@ export const load: PageServerLoad = async (event) => {
 				domain: row.domain,
 				approvalStatus: row.approvalStatus,
 				partnerPackage: row.partnerPackage,
+				partnerStatus: row.partnerStatus,
+				exchangeStatus: row.exchangeStatus,
+				trustScore: Number(row.trustScore),
+				boostStatus: row.boostStatus,
+				boostRouteTargets: row.boostRouteTargets,
+				walletBalance: Number(row.walletBalance),
+				exchangeCreditBalance: Number(row.exchangeCreditBalance),
+				maxCpc: Number(row.maxCpc),
+				dailySpendCap: Number(row.dailySpendCap),
 				status: row.status,
 				articleCount: Number(row.articleCount),
 				clickCount: Number(row.clickCount),
 				uniqueClickCount: Number(row.uniqueClickCount),
+				trafficTarget: Number(row.trafficTarget),
 				lastFetchedAt: row.lastFetchedAt ? toIsoString(row.lastFetchedAt) : null
 			})),
 			sourceState: null,
+			commercialSummary: null,
 			sourceRules: [],
 			feedHealth: [],
 			sourceSettings: null,
 			clicksOverTime: [],
 			topCategories: [],
-			trafficSources: []
+			trafficSources: [],
+			routePerformance: [],
+			recentLedger: [],
+			recentInvoices: []
 			};
 		}
 
@@ -151,6 +194,19 @@ export const load: PageServerLoad = async (event) => {
 					sourceDomain: sources.domain,
 					approvalStatus: sources.approvalStatus,
 					partnerPackage: sources.partnerPackage,
+					partnerStatus: sources.partnerStatus,
+					exchangeStatus: sources.exchangeStatus,
+					trafficTarget: sources.trafficTarget,
+					trustScore: sources.trustScore,
+					boostStatus: sources.boostStatus,
+					boostRouteTargets: sources.boostRouteTargets,
+					walletBalance: sources.walletBalance,
+					exchangeCreditBalance: sources.exchangeCreditBalance,
+					maxCpc: sources.maxCpc,
+					dailySpendCap: sources.dailySpendCap,
+					lifetimeBillableClicks: sources.lifetimeBillableClicks,
+					lifetimeWalletSpend: sources.lifetimeWalletSpend,
+					lifetimeExchangeSpend: sources.lifetimeExchangeSpend,
 					status: sources.status,
 					statusNote: sources.statusNote
 				})
@@ -170,20 +226,34 @@ export const load: PageServerLoad = async (event) => {
 			reportDays,
 			reportRanges: REPORT_RANGES,
 			availableSources: [],
+			commercialSummary: null,
 			sourceRules: [],
 			feedHealth: [],
 			sourceSettings: null,
 			clicksOverTime: [],
 			topCategories: [],
 			trafficSources: [],
+			routePerformance: [],
+			recentLedger: [],
+			recentInvoices: [],
 			sourceState: null
 		};
 	}
 
 	const sourceState = {
 		...sourceStateRow,
+		trafficTarget: Number(sourceStateRow.trafficTarget),
+		trustScore: Number(sourceStateRow.trustScore),
+		walletBalance: Number(sourceStateRow.walletBalance),
+		exchangeCreditBalance: Number(sourceStateRow.exchangeCreditBalance),
+		maxCpc: Number(sourceStateRow.maxCpc),
+		dailySpendCap: Number(sourceStateRow.dailySpendCap),
+		lifetimeBillableClicks: Number(sourceStateRow.lifetimeBillableClicks),
+		lifetimeWalletSpend: Number(sourceStateRow.lifetimeWalletSpend),
+		lifetimeExchangeSpend: Number(sourceStateRow.lifetimeExchangeSpend),
 		isApproved: isApprovedSource(sourceStateRow.approvalStatus)
 	};
+	const pendingCommercialSummary = buildCommercialSummary(sourceState, 0);
 
 	if (!sourceState.isApproved) {
 		return {
@@ -196,12 +266,16 @@ export const load: PageServerLoad = async (event) => {
 			reportDays,
 			reportRanges: REPORT_RANGES,
 			availableSources: [],
+			commercialSummary: pendingCommercialSummary,
 			sourceRules: [],
 			feedHealth: [],
 			sourceSettings: null,
 			clicksOverTime: [],
 			topCategories: [],
 			trafficSources: [],
+			routePerformance: [],
+			recentLedger: [],
+			recentInvoices: [],
 			sourceState
 		};
 	}
@@ -213,7 +287,7 @@ export const load: PageServerLoad = async (event) => {
 		: gte(clickEvents.createdAt, reportSince);
 
 	const clickWhere = buildClickWhere(scopedSourceId, reportSinceIso);
-	const [sourceStats, topArticles, recentClicks, categoryRows, ruleRows, feedRows, sourceSettingsRows, clicksOverTimeRows, topCategoryRows, trafficSourceRows] =
+	const [sourceStats, topArticles, recentClicks, categoryRows, ruleRows, feedRows, sourceSettingsRows, clicksOverTimeRows, topCategoryRows, trafficSourceRows, routePerformanceRows, recentLedgerRows, recentInvoiceRows] =
 		await Promise.all([
 		db
 			.select({
@@ -230,28 +304,13 @@ export const load: PageServerLoad = async (event) => {
 					SELECT count(*)::int
 					FROM ${clickEvents}
 					WHERE ${clickEvents.sourceId} = ${sources.id}
-						AND ${clickEvents.isBot} = false
-						AND ${clickEvents.createdAt} >= ${reportSince}
-				)`,
-				rawClickCount: sql<number>`(
-					SELECT count(*)::int
-					FROM ${clickEvents}
-					WHERE ${clickEvents.sourceId} = ${sources.id}
 						AND ${clickEvents.createdAt} >= ${reportSince}
 				)`,
 				uniqueClickCount: sql<number>`(
 					SELECT count(*)::int
 					FROM ${clickEvents}
 					WHERE ${clickEvents.sourceId} = ${sources.id}
-						AND ${clickEvents.isBot} = false
 						AND ${clickEvents.isUnique} = true
-						AND ${clickEvents.createdAt} >= ${reportSince}
-				)`,
-				botClickCount: sql<number>`(
-					SELECT count(*)::int
-					FROM ${clickEvents}
-					WHERE ${clickEvents.sourceId} = ${sources.id}
-						AND ${clickEvents.isBot} = true
 						AND ${clickEvents.createdAt} >= ${reportSince}
 				)`
 			})
@@ -265,10 +324,8 @@ export const load: PageServerLoad = async (event) => {
 				sourceName: sources.name,
 				clickScore: articles.clickScore,
 				publishedAt: articles.publishedAt,
-				clickCount: sql<number>`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isBot} = false)`,
-				rawClickCount: count(clickEvents.id),
-				uniqueClickCount: sql<number>`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isBot} = false AND ${clickEvents.isUnique} = true)`,
-				botClickCount: sql<number>`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isBot} = true)`
+				clickCount: sql<number>`count(${clickEvents.id})`,
+				uniqueClickCount: sql<number>`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isUnique} = true)`
 			})
 			.from(articles)
 			.innerJoin(sources, eq(sources.id, articles.sourceId))
@@ -276,7 +333,7 @@ export const load: PageServerLoad = async (event) => {
 			.where(articleFilter ? and(eq(articles.active, true), articleFilter) : eq(articles.active, true))
 			.groupBy(articles.id, sources.id)
 			.orderBy(
-				desc(sql`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isBot} = false)`),
+				desc(sql`count(${clickEvents.id})`),
 				desc(articles.clickScore),
 				desc(articles.publishedAt)
 			)
@@ -288,8 +345,6 @@ export const load: PageServerLoad = async (event) => {
 				articleTitle: articles.title,
 				referrer: clickEvents.referrer,
 				utmCampaign: clickEvents.utmCampaign,
-				isBot: clickEvents.isBot,
-				botName: clickEvents.botName,
 				isUnique: clickEvents.isUnique,
 				createdAt: clickEvents.createdAt
 			})
@@ -355,18 +410,65 @@ export const load: PageServerLoad = async (event) => {
 		db
 			.select({
 				label: trafficLabelExpr,
-				clickCount: sql<number>`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isBot} = false)::int`,
-				uniqueClickCount: sql<number>`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isBot} = false AND ${clickEvents.isUnique} = true)::int`
+				clickCount: sql<number>`count(${clickEvents.id})::int`,
+				uniqueClickCount: sql<number>`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isUnique} = true)::int`
 			})
 			.from(clickEvents)
 			.where(and(...clickWhere))
 			.groupBy(trafficLabelExpr)
 			.orderBy(
-				desc(sql`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isBot} = false)`),
-				desc(sql`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isBot} = false AND ${clickEvents.isUnique} = true)`)
+				desc(sql`count(${clickEvents.id})`),
+				desc(sql`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isUnique} = true)`)
 			)
-			.limit(8)
+			.limit(8),
+		db
+			.select({
+				surface: clickEvents.surface,
+				acquisition_mode: clickEvents.acquisitionMode,
+				click_count: sql<number>`count(${clickEvents.id}) FILTER (WHERE ${clickEvents.isUnique} = true)::int`,
+				spend_amount: sql<number>`coalesce(sum(${clickEvents.chargeAmount}), 0)::int`
+			})
+			.from(clickEvents)
+			.where(and(...clickWhere))
+			.groupBy(clickEvents.surface, clickEvents.acquisitionMode)
+			.orderBy(desc(sql`coalesce(sum(${clickEvents.chargeAmount}), 0)`)),
+		scopedSourceId
+			? db
+					.select({
+						id: sourceBillingLedger.id,
+						entryType: sourceBillingLedger.entryType,
+						fundingType: sourceBillingLedger.fundingType,
+						surface: sourceBillingLedger.surface,
+						amount: sourceBillingLedger.amount,
+						description: sourceBillingLedger.description,
+						createdAt: sourceBillingLedger.createdAt
+					})
+					.from(sourceBillingLedger)
+					.where(eq(sourceBillingLedger.sourceId, scopedSourceId))
+					.orderBy(desc(sourceBillingLedger.createdAt))
+					.limit(12)
+			: Promise.resolve([]),
+		scopedSourceId
+			? db
+					.select({
+						id: sourceBillingInvoices.id,
+						amount: sourceBillingInvoices.amount,
+						status: sourceBillingInvoices.status,
+						provider: sourceBillingInvoices.provider,
+						externalNumber: sourceBillingInvoices.externalNumber,
+						description: sourceBillingInvoices.description,
+						createdAt: sourceBillingInvoices.createdAt
+					})
+					.from(sourceBillingInvoices)
+					.where(eq(sourceBillingInvoices.sourceId, scopedSourceId))
+					.orderBy(desc(sourceBillingInvoices.createdAt))
+					.limit(8)
+			: Promise.resolve([])
 		]);
+	const commercialSummary = buildCommercialSummary(
+		sourceState,
+		Number(sourceStats[0]?.clickCount ?? 0)
+	);
 
 	return {
 		sourceStats: sourceStats.map((row) => ({
@@ -375,9 +477,7 @@ export const load: PageServerLoad = async (event) => {
 			sourceDomain: row.sourceDomain,
 			articleCount: Number(row.articleCount),
 			clickCount: Number(row.clickCount),
-			rawClickCount: Number(row.rawClickCount),
-			uniqueClickCount: Number(row.uniqueClickCount),
-			botClickCount: Number(row.botClickCount)
+			uniqueClickCount: Number(row.uniqueClickCount)
 		})),
 		topArticles: topArticles.map((row) => ({
 			id: row.id,
@@ -385,9 +485,7 @@ export const load: PageServerLoad = async (event) => {
 			sourceName: row.sourceName,
 			clickScore: row.clickScore,
 			clickCount: Number(row.clickCount),
-			rawClickCount: Number(row.rawClickCount),
 			uniqueClickCount: Number(row.uniqueClickCount),
-			botClickCount: Number(row.botClickCount),
 			publishedAt: toIsoString(row.publishedAt)
 		})),
 		recentClicks: recentClicks.map((row) => ({
@@ -396,8 +494,6 @@ export const load: PageServerLoad = async (event) => {
 			articleTitle: row.articleTitle,
 			referrer: row.referrer,
 			utmCampaign: row.utmCampaign,
-			isBot: row.isBot,
-			botName: row.botName,
 			isUnique: row.isUnique,
 			createdAt: toIsoString(row.createdAt)
 		})),
@@ -408,6 +504,7 @@ export const load: PageServerLoad = async (event) => {
 			reportRanges: REPORT_RANGES,
 			availableSources: [],
 			sourceState,
+			commercialSummary,
 			sourceRules: ruleRows,
 			feedHealth: feedRows.map((row) => ({
 			feedId: row.feedId,
@@ -442,6 +539,33 @@ export const load: PageServerLoad = async (event) => {
 			label: row.label,
 			clickCount: Number(row.clickCount),
 			uniqueClickCount: Number(row.uniqueClickCount)
+		})),
+		routePerformance: routePerformanceRows.map((row) => ({
+			surface: row.surface ?? 'unknown',
+			surfaceLabel: row.surface ? (publicSurfaceLabels[row.surface as keyof typeof publicSurfaceLabels] ?? row.surface) : 'Ismeretlen',
+			acquisitionMode: row.acquisition_mode,
+			acquisitionModeLabel:
+				acquisitionModeLabels[row.acquisition_mode as keyof typeof acquisitionModeLabels] ?? row.acquisition_mode,
+			clickCount: Number(row.click_count),
+			spendAmount: Number(row.spend_amount)
+		})),
+		recentLedger: recentLedgerRows.map((row) => ({
+			id: row.id,
+			entryType: row.entryType,
+			fundingType: row.fundingType,
+			surface: row.surface,
+			amount: Number(row.amount),
+			description: row.description,
+			createdAt: toIsoString(row.createdAt)
+		})),
+		recentInvoices: recentInvoiceRows.map((row) => ({
+			id: row.id,
+			amount: Number(row.amount),
+			status: row.status,
+			provider: row.provider,
+			externalNumber: row.externalNumber,
+			description: row.description,
+			createdAt: toIsoString(row.createdAt)
 		}))
 	};
 };
@@ -591,6 +715,88 @@ export const actions: Actions = {
 			.where(eq(sources.id, sourceId));
 
 		return { ok: true, action: 'updateUtmSettings' };
+	},
+	updateBoostSettings: async (event) => {
+		const { sourceId } = requirePartnerAccess(event);
+		const form = await event.request.formData();
+
+		if (!sourceId) {
+			return { ok: false, action: 'updateBoostSettings', error: 'Nincs kiválasztott forrás.' };
+		}
+		const approval = await getSourceApprovalContext(sourceId);
+		if (!isApprovedSource(approval.approvalStatus)) {
+			return {
+				ok: false,
+				action: 'updateBoostSettings',
+				error: 'A forrás jóváhagyása szükséges ehhez a művelethez.'
+			};
+		}
+
+		const validation = validateSourceAcquisitionInput({
+			trustScore: approval.trustScore ?? 5,
+			boostStatus: form.get('boostStatus'),
+			boostRouteTargets: form.getAll('boostRouteTargets'),
+			maxCpc: form.get('maxCpc'),
+			dailySpendCap: form.get('dailySpendCap'),
+			exchangeCreditBalance: approval.exchangeCreditBalance ?? 0,
+			approvalStatus: approval.approvalStatus
+		});
+		if (!validation.ok) {
+			return {
+				ok: false,
+				action: 'updateBoostSettings',
+				error: partnerInputError(validation)
+			};
+		}
+
+		await db
+			.update(sources)
+			.set({
+				boostStatus: validation.data.boostStatus,
+				boostRouteTargets: serializeSurfaceTargets(validation.data.boostRouteTargets),
+				maxCpc: validation.data.maxCpc,
+				dailySpendCap: validation.data.dailySpendCap,
+				updatedAt: new Date()
+			})
+			.where(eq(sources.id, sourceId));
+
+		return { ok: true, action: 'updateBoostSettings' };
+	},
+	topupWallet: async (event) => {
+		const { sourceId } = requirePartnerAccess(event);
+		const form = await event.request.formData();
+
+		if (!sourceId) {
+			return { ok: false, action: 'topupWallet', error: 'Nincs kiválasztott forrás.' };
+		}
+
+		const validation = validateWalletTopUpInput({
+			amount: form.get('amount'),
+			billingName: form.get('billingName'),
+			billingEmail: form.get('billingEmail')
+		});
+		if (!validation.ok) {
+			return { ok: false, action: 'topupWallet', error: partnerInputError(validation) };
+		}
+
+		const [source] = await db
+			.select({ id: sources.id, name: sources.name })
+			.from(sources)
+			.where(eq(sources.id, sourceId))
+			.limit(1);
+		if (!source) {
+			return { ok: false, action: 'topupWallet', error: 'A forrás nem található.' };
+		}
+
+		await createWalletTopUp({
+			sourceId: source.id,
+			sourceName: source.name,
+			amount: validation.data.amount,
+			billingName: validation.data.billingName,
+			billingEmail: validation.data.billingEmail
+		});
+
+		return { ok: true, action: 'topupWallet' };
 	}
 };
 
@@ -628,8 +834,8 @@ function getClicksOverTime(sourceId: number | null, days: number) {
 		)
 		SELECT
 			days.day::text AS day,
-			count(ce.id) FILTER (WHERE ce.is_bot = false) AS "clickCount",
-			count(ce.id) FILTER (WHERE ce.is_bot = false AND ce.is_unique = true) AS "uniqueClickCount"
+			count(ce.id) AS "clickCount",
+			count(ce.id) FILTER (WHERE ce.is_unique = true) AS "uniqueClickCount"
 		FROM days
 		LEFT JOIN click_events ce ON ce.created_at >= days.day
 			AND ce.created_at < days.day + interval '1 day'
@@ -642,16 +848,39 @@ function getClicksOverTime(sourceId: number | null, days: number) {
 function getTrafficSourceCase() {
 	return sql`
 		CASE
-			WHEN nullif(trim(coalesce(ce.referrer, '')), '') IS NULL THEN 'Közvetlen / ismeretlen'
-			WHEN ce.referrer ILIKE '%/kereses%' THEN 'Keresés'
-			WHEN ce.referrer ILIKE '%/konyvjelzok%' THEN 'Könyvjelzők'
-			WHEN ce.referrer ILIKE '%/top%' THEN 'Toplista'
-			WHEN ce.referrer ILIKE '%/rovat/%' THEN 'Rovat oldal'
-			WHEN ce.referrer ~ '/[^/?#]+/[^/?#]+/?(\\?|#|$)' THEN 'Forrás + rovat oldal'
-			WHEN ce.referrer ~ '/[^/?#]+/?(\\?|#|$)' THEN 'Forrás oldal'
+			WHEN nullif(trim(coalesce(${clickEvents.referrer}, '')), '') IS NULL THEN 'Közvetlen / ismeretlen'
+			WHEN ${clickEvents.referrer} ILIKE '%/kereses%' THEN 'Keresés'
+			WHEN ${clickEvents.referrer} ILIKE '%/konyvjelzok%' THEN 'Könyvjelzők'
+			WHEN ${clickEvents.referrer} ILIKE '%/top%' THEN 'Toplista'
+			WHEN ${clickEvents.referrer} ILIKE '%/rovat/%' THEN 'Rovat oldal'
+			WHEN ${clickEvents.referrer} ~ '/[^/?#]+/[^/?#]+/?(\\?|#|$)' THEN 'Forrás + rovat oldal'
+			WHEN ${clickEvents.referrer} ~ '/[^/?#]+/?(\\?|#|$)' THEN 'Forrás oldal'
 			ELSE 'Egyéb referrer'
 		END
 	`;
+}
+
+function buildCommercialSummary(
+	sourceState: {
+		partnerPackage: string;
+		partnerStatus: string;
+		exchangeStatus: string;
+		trafficTarget: number;
+	},
+	clickCount: number
+) {
+	const progress = getTrafficTargetProgress(sourceState.trafficTarget, clickCount);
+
+	return {
+		partnerPackage: sourceState.partnerPackage,
+		partnerStatus: sourceState.partnerStatus,
+		exchangeStatus: sourceState.exchangeStatus,
+		trafficTarget: progress.target,
+		targetClickCount: progress.clickCount,
+		targetRemaining: progress.remaining,
+		targetProgressPercent: progress.progressPercent,
+		hasTrafficTarget: progress.hasTarget
+	};
 }
 
 function formatDayLabel(day: string) {
@@ -673,6 +902,17 @@ function partnerInputError(validation: ValidationFailure) {
 		validation.fieldErrors.utmCampaign
 	) {
 		return 'Az UTM mezők csak betűket, számokat, pontot, aláhúzást, kötőjelet és hullámjelet tartalmazhatnak, és legfeljebb 120 karakteresek lehetnek.';
+	}
+	if (
+		validation.fieldErrors.maxCpc ||
+		validation.fieldErrors.dailySpendCap ||
+		validation.fieldErrors.boostRouteTargets ||
+		validation.fieldErrors.boostStatus
+	) {
+		return 'Adj meg érvényes boost beállításokat: állapot, legalább egy felület, nem negatív max CPC és napi limit.';
+	}
+	if (validation.fieldErrors.amount || validation.fieldErrors.billingName || validation.fieldErrors.billingEmail) {
+		return 'Adj meg érvényes wallet feltöltési adatokat: pozitív összeg, számlázási név és email.';
 	}
 
 	return validation.summary || 'Érvényes partner adatok szükségesek.';

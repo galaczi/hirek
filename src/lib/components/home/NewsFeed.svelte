@@ -37,6 +37,14 @@
 		showExcerpt?: boolean;
 		fontSize?: number;
 	} = $props();
+
+	function articleHref(article: Article) {
+		const params = new URLSearchParams();
+		if (article.surfaceKey) params.set('surface', article.surfaceKey);
+		if (article.deliveryMode && article.deliveryMode !== 'organic') params.set('mode', article.deliveryMode);
+		const query = params.toString();
+		return query ? `/go/${article.id}?${query}` : `/go/${article.id}`;
+	}
 </script>
 
 <section
@@ -89,7 +97,7 @@
 						<div class="news-item-left">
 							<span class={`recency-indicator ${recencyClass(article)}`} title="Frissesség"></span>
 							<span class="news-time">{formatTime(article.publishedAt)}</span>
-							<a class="news-title" href={`/go/${article.id}`} target="_blank" rel="noopener">{article.title}</a>
+							<a class="news-title" href={articleHref(article)} target="_blank" rel="noopener">{article.title}</a>
 						</div>
 						<div class="news-item-right">
 							<span class={`source-badge ${article.source}`}>{article.sourceName}</span>

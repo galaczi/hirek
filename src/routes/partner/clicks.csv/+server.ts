@@ -30,8 +30,6 @@ export const GET: RequestHandler = async (event) => {
 			referrer: clickEvents.referrer,
 			utmCampaign: clickEvents.utmCampaign,
 			utmContent: clickEvents.utmContent,
-			isBot: clickEvents.isBot,
-			botName: clickEvents.botName,
 			isUnique: clickEvents.isUnique
 		})
 		.from(clickEvents)
@@ -52,8 +50,6 @@ export const GET: RequestHandler = async (event) => {
 			'referrer',
 			'utm_campaign',
 			'utm_content',
-			'is_bot',
-			'bot_name',
 			'is_unique'
 		],
 		...rows.map((row) => [
@@ -65,8 +61,6 @@ export const GET: RequestHandler = async (event) => {
 			row.referrer ?? '',
 			row.utmCampaign,
 			row.utmContent ?? '',
-			String(row.isBot),
-			row.botName ?? '',
 			String(row.isUnique)
 		])
 	]
