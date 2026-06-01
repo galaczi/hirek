@@ -121,7 +121,7 @@ async function getScoredDiscoveryArticles(surface: PublicSurface, conditions: SQ
 		.where(
 			and(
 				eq(sourceSurfaceRollingStats.surface, surface),
-				sql`${sourceSurfaceRollingStats.day} >= current_date - ${RETENTION_DAYS}`
+				sql`${sourceSurfaceRollingStats.day} >= current_date - cast(${RETENTION_DAYS} as integer)`
 			)
 		)
 		.groupBy(sourceSurfaceRollingStats.sourceId)
